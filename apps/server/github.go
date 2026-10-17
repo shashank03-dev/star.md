@@ -21,7 +21,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -170,25 +169,21 @@ func (c *ghClient) mergedPulls(ctx context.Context, repo string) ([]prMerge, err
 		out = append(out, prMerge{Number: p.Number, Ref: p.Head.Ref, MergedAt: *p.MergedAt})
 	}
 
-	// Commit counts, concurrently so the calls overlap. A failure just leaves
-	// Commits at 0, which renders as an unknown-size PR rather than an error.
-	var wg sync.WaitGroup
+	// Commit counts, one at a time: GitHub's best-practices guide is explicit
+	// that secondary rate limits are avoided by serial, not concurrent,
+	// requests. A failure just leaves Commits at 0, which renders as an
+	// unknown-size PR rather than an error.
 	for i := range out {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			body, err := c.get(ctx, fmt.Sprintf("repos/%s/pulls/%d", repo, out[i].Number))
-			if err != nil {
-				return
-			}
-			var d struct {
-				Commits int `json:"commits"`
-			}
-			if json.Unmarshal(body, &d) == nil && d.Commits > 0 {
-				out[i].Commits = d.Commits
-			}
-		}(i)
+		body, err := c.get(ctx, fmt.Sprintf("repos/%s/pulls/%d", repo, out[i].Number))
+		if err != nil {
+			continue
+		}
+		var d struct {
+			Commits int `json:"commits"`
+		}
+		if json.Unmarshal(body, &d) == nil && d.Commits > 0 {
+			out[i].Commits = d.Commits
+		}
 	}
-	wg.Wait()
 	return out, nil
 }

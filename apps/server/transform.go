@@ -6,9 +6,11 @@ import (
 	"sort"
 )
 
-// paramsVersion invalidates cached blobs whenever the transform/scaling math
-// changes. Bump this on any change to the shaping below.
-const paramsVersion = "v1"
+// paramsVersion invalidates cached blobs whenever the emitted contract shape
+// changes. Bump the v2 prefix by hand on any transform change; the suffix
+// tracks the sampling knobs automatically, so moving one of them can never
+// silently serve contracts the old knobs shaped.
+var paramsVersion = fmt.Sprintf("v2-s%d-b%d", maxStars, branchCap)
 
 // Star-count ceiling for the current one-sprite-per-star renderer. Kept below
 // the fps cliff for that architecture; measured empirically in-browser.
@@ -179,7 +181,11 @@ func buildMain(commits []commitRec, tagSHA map[string]string) []MainNode {
 			out[i].BirthT = out[i-1].BirthT
 		}
 	}
-	out[len(out)-1].BirthT = 1
+	// A single-commit repo has one node that is both genesis and HEAD: genesis
+	// wins, it must ignite at 0.
+	if len(out) > 1 {
+		out[len(out)-1].BirthT = 1
+	}
 	return out
 }
 
@@ -240,17 +246,22 @@ func buildBranches(pulls []prMerge, branchList []branchRec,
 	}
 
 	seen := map[string]bool{}
-	var out []BranchNode
+	// Non-nil from the start: the contract promises BranchNode[], and a Git
+	// repo with no PRs or live branches must still serialize "branches": []
+	// rather than null (which the renderer's .forEach would crash on).
+	out := []BranchNode{}
 
-	// Merged PRs first, newest first, deduped by head ref.
+	// Merged PRs first, newest first, deduped by PR number when known (two
+	// PRs can share a squash-merge title; by ref otherwise).
 	for _, p := range pulls {
 		if len(out) >= branchCap {
 			break
 		}
-		if p.Ref == "" || seen[p.Ref] {
+		key := prKey(p)
+		if key == "" || seen[key] {
 			continue
 		}
-		seen[p.Ref] = true
+		seen[key] = true
 		// A squashed PR's own commits are gone from the history, so its size is
 		// genuinely unknown: say so rather than print a made-up count.
 		sub := fmt.Sprintf("PR #%d · %s", p.Number, plural(p.Commits, "commit"))

@@ -106,11 +106,13 @@ type gitSource struct {
 	sem      chan struct{}
 	flight   singleflight.Group
 	timeout  time.Duration
-	maxBytes int64 // per-repo cap, enforced while cloning
-	diskCap  int64 // total mirror-cache budget
+	probe    time.Duration // ceiling for the per-request HEAD freshness probe
+	maxBytes int64         // per-repo cap, enforced while cloning
+	diskCap  int64         // total mirror-cache budget
 	ttl      time.Duration
 
-	sweeping sync.Mutex // one eviction pass at a time
+	gate     *mirrorGate // per-directory use vs sweep arbitration
+	sweeping sync.Mutex  // one eviction pass at a time
 }
 
 func newGitSource(tokens *tokenPool) *gitSource {
@@ -128,9 +130,11 @@ func newGitSource(tokens *tokenPool) *gitSource {
 		tokens:   tokens,
 		sem:      make(chan struct{}, envInt("CLONE_CONCURRENCY", 4)),
 		timeout:  envDur("CLONE_TIMEOUT", 10*time.Minute),
+		probe:    envDur("CLONE_PROBE_TIMEOUT", 3*time.Minute),
 		maxBytes: int64(envInt("CLONE_MAX_MB", 4096)) << 20,
 		diskCap:  int64(envInt("CLONE_DISK_MB", 20480)) << 20,
 		ttl:      envDur("CLONE_TTL", 7*24*time.Hour),
+		gate:     newMirrorGate(),
 	}
 	return g
 }
@@ -141,7 +145,28 @@ func newGitSource(tokens *tokenPool) *gitSource {
 // `git ls-remote --symref` round trip. This is the freshness probe and cache
 // key source: it replaces the REST call that used to cost quota on every hit.
 func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defaultBranch string, err error) {
+	// The probe runs on every request, cache hit or miss, so it must not be
+	// able to hang a handler behind a stalled connection: git's HTTP transport
+	// has no low-speed abort of its own, and without a deadline a blackholed
+	// socket can pin the request for the kernel's retransmit budget (many
+	// minutes), or indefinitely while the client waits. Bounded well below
+	// CLONE_TIMEOUT because a probe that slow has already failed.
+	ctx, cancel := context.WithTimeout(ctx, g.probe)
+	defer cancel()
+
+	// Anonymous first: a public repo is probed with no token at all, so a
+	// stale or revoked credential cannot turn a working public repo into a
+	// 404. Only an anonymous miss (how a private repo presents itself)
+	// retries with credentials.
 	out, err := g.run(ctx, "", "ls-remote", "--symref", repoURL(repo), "HEAD")
+	if g.retryAuthed(err) {
+		// If the credentialed retry fails too, the anonymous error is the one
+		// reported: it names the real problem (an IP rate limit, say) better
+		// than the credential error that replaced it.
+		if out2, err2 := g.runEnv(ctx, true, "", "ls-remote", "--symref", repoURL(repo), "HEAD"); err2 == nil {
+			out, err = out2, nil
+		}
+	}
 	if err != nil {
 		return "", "", err
 	}
@@ -174,12 +199,24 @@ func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defau
 // for the same repo+head share one clone and one parse: the second caller
 // blocks on the first instead of starting a duplicate clone.
 func (g *gitSource) snapshot(ctx context.Context, repo, headSHA, defaultBranch string) (*repoSnapshot, error) {
+	return g.snapshotVia(ctx, repo, headSHA, defaultBranch, g.buildSnapshot)
+}
+
+// snapshotVia is snapshot with the build step injectable, so a test can pin
+// that the panic guard really wraps the shared build - if it ever stops doing
+// so, a panic escapes singleflight into a fresh goroutine and kills the
+// process (see guardedSnapshot).
+func (g *gitSource) snapshotVia(ctx context.Context, repo, headSHA, defaultBranch string,
+	build func(context.Context, string, string, string) (*repoSnapshot, error)) (*repoSnapshot, error) {
 	ch := g.flight.DoChan(repo+"@"+headSHA, func() (any, error) {
 		// Detached from whichever caller happened to start it: one browser tab
 		// closing must not cancel a clone every other waiter depends on, and a
 		// clone is worth finishing anyway because it warms the mirror. The
 		// clone timeout and the semaphore still bound it.
-		return g.buildSnapshot(context.WithoutCancel(ctx), repo, headSHA, defaultBranch)
+		snap, err := guardedSnapshot(repo, func() (*repoSnapshot, error) {
+			return build(context.WithoutCancel(ctx), repo, headSHA, defaultBranch)
+		})
+		return snap, err
 	})
 	select {
 	case res := <-ch:
@@ -192,11 +229,34 @@ func (g *gitSource) snapshot(ctx context.Context, repo, headSHA, defaultBranch s
 	}
 }
 
+// guardedSnapshot converts a panic inside a shared build into an ordinary
+// error. singleflight re-raises a panic in a fresh goroutine when callers are
+// attached to it, where net/http's per-connection recover cannot catch it - so
+// without this, one bad input would take down every request in flight. The
+// detached build therefore contains its own failures.
+func guardedSnapshot(repo string, build func() (*repoSnapshot, error)) (snap *repoSnapshot, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("git: panic building %s: %v", repo, r)
+			snap, err = nil, &apiError{status: 500, code: "internal",
+				msg: "internal error while building repository"}
+		}
+	}()
+	return build()
+}
+
 func (g *gitSource) buildSnapshot(ctx context.Context, repo, headSHA, defaultBranch string) (*repoSnapshot, error) {
 	dir, err := g.mirrorPath(repo)
 	if err != nil {
 		return nil, err
 	}
+
+	// One build at a time per mirror, held from before ensureMirror until the
+	// parse is done: a fetch (or a failed fetch's RemoveAll) must never race
+	// another build reading the same directory, and the sweep must see the
+	// mirror as in use for the whole span (see mirrorGate).
+	g.gate.acquire(dir)
+	defer g.gate.release(dir)
 
 	// Bound how many clones run at once: each one is network + disk heavy, and
 	// an unbounded fan-out would thrash both.
@@ -231,10 +291,20 @@ func (g *gitSource) buildSnapshot(ctx context.Context, repo, headSHA, defaultBra
 func (g *gitSource) ensureMirror(ctx context.Context, repo, dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "HEAD")); err == nil {
 		log.Printf("git: fetch %s", repo)
-		if _, err := g.runCapped(ctx, dir, dir, "fetch", "--filter=tree:0", "--prune",
-			repoURL(repo), "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"); err == nil {
-			now := time.Now()
-			_ = os.Chtimes(dir, now, now) // LRU stamp: last use, not last write
+		// Lease the mirror BEFORE the network read: sweep treats the mtime as
+		// "in use since", and a slow fetch must not look idle while it runs.
+		g.touch(dir)
+		args := []string{"fetch", "--filter=tree:0", "--prune",
+			repoURL(repo), "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"}
+		_, err := g.runCapped(ctx, false, dir, dir, args...)
+		if g.retryAuthed(err) {
+			// Report the anonymous failure if the retry fails too (see remoteHead).
+			if _, err2 := g.runCapped(ctx, true, dir, dir, args...); err2 == nil {
+				err = nil
+			}
+		}
+		if err == nil {
+			g.touch(dir) // LRU stamp: last use, not last write
 			return nil
 		}
 		// A corrupt or half-written mirror must not wedge this repo forever.
@@ -244,8 +314,18 @@ func (g *gitSource) ensureMirror(ctx context.Context, repo, dir string) error {
 
 	log.Printf("git: clone %s (blob-less bare)", repo)
 	tmp := dir + ".tmp" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	if _, err := g.runCapped(ctx, "", tmp, "clone", "--bare", "--filter=tree:0",
-		repoURL(repo), tmp); err != nil {
+	args := []string{"clone", "--bare", "--filter=tree:0", repoURL(repo), tmp}
+	_, err := g.runCapped(ctx, false, "", tmp, args...)
+	if g.retryAuthed(err) {
+		// The anonymous attempt may have left partial state in tmp, and git
+		// clone refuses a non-empty destination: clear it before the retry.
+		// If the retry fails too, the anonymous error is the one reported.
+		_ = os.RemoveAll(tmp)
+		if _, err2 := g.runCapped(ctx, true, "", tmp, args...); err2 == nil {
+			err = nil
+		}
+	}
+	if err != nil {
 		_ = os.RemoveAll(tmp)
 		return err
 	}
@@ -253,7 +333,14 @@ func (g *gitSource) ensureMirror(ctx context.Context, repo, dir string) error {
 		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("install mirror: %w", err)
 	}
+	g.touch(dir)
 	return nil
+}
+
+// touch stamps a mirror's mtime, the lease the sweep checks before evicting.
+func (g *gitSource) touch(dir string) {
+	now := time.Now()
+	_ = os.Chtimes(dir, now, now)
 }
 
 // parse reads the mirror into a snapshot. Everything here is local: no network,
@@ -430,8 +517,19 @@ func parsePR(subject string, c commitRec) (prMerge, bool) {
 	return prMerge{}, false
 }
 
-// countPRCommits keeps the newest PRs (deduped by ref, capped at what the
-// legend can show) and fills in the exact commit count for real merge commits:
+// prKey is the dedupe identity of a PR. The number wins when known: two
+// distinct PRs can share a squash-merge title (the Ref), and collapsing them
+// would drop one asterism from the legend.
+func prKey(p prMerge) string {
+	if p.Number > 0 {
+		return "#" + strconv.Itoa(p.Number)
+	}
+	return p.Ref
+}
+
+// countPRCommits keeps the newest PRs (deduped by PR number when known, capped
+// at what the legend can show) and fills in the exact commit count for real
+// merge commits:
 // everything reachable from the merged branch but not from the trunk it landed
 // on. Squashed PRs keep Commits == 0 - their original commits no longer exist,
 // and inventing a number would put a fabricated count on the star map.
@@ -442,10 +540,11 @@ func (g *gitSource) countPRCommits(ctx context.Context, dir string, prs []prMerg
 		if len(out) >= branchCap {
 			break
 		}
-		if p.Ref == "" || seen[p.Ref] {
+		key := prKey(p)
+		if key == "" || seen[key] {
 			continue
 		}
-		seen[p.Ref] = true
+		seen[key] = true
 		out = append(out, p)
 	}
 
@@ -525,7 +624,9 @@ func repoURL(repo string) string { return "https://github.com/" + repo + ".git" 
 // gitEnv is a deliberately minimal environment: no user config, no system
 // config, no interactive prompt, no credential helper. A repo URL is
 // attacker-controlled input, so git gets nothing it could be talked into using.
-func (g *gitSource) gitEnv() []string {
+// Credentials are only layered in when authed is true: network callers start
+// anonymous and retry with auth only on a not-found (see retryAuthed).
+func (g *gitSource) gitEnv(authed bool) []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + g.home,
@@ -534,6 +635,9 @@ func (g *gitSource) gitEnv() []string {
 		"GIT_ASKPASS=",             // no GUI/helper credential path
 		"GIT_PROTOCOL_FROM_USER=0", // treat the URL as untrusted input
 		"GIT_ALLOW_PROTOCOL=https",
+	}
+	if !authed {
+		return env
 	}
 	if t := g.tokens.next(); t != "" {
 		// Private-repo auth. Passed as config through the environment (git
@@ -549,7 +653,7 @@ func (g *gitSource) gitEnv() []string {
 	return env
 }
 
-func (g *gitSource) command(ctx context.Context, dir string, args ...string) *exec.Cmd {
+func (g *gitSource) command(ctx context.Context, dir string, authed bool, args ...string) *exec.Cmd {
 	full := append([]string{
 		"-c", "core.hooksPath=" + filepath.Join(g.home, "no-hooks"), // never run repo-supplied hooks
 		"-c", "protocol.version=2",
@@ -557,7 +661,7 @@ func (g *gitSource) command(ctx context.Context, dir string, args ...string) *ex
 	}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = g.gitEnv()
+	cmd.Env = g.gitEnv(authed)
 	// Kill the whole process group on timeout: git spawns git-remote-https,
 	// which would otherwise keep downloading after the parent is gone.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -567,12 +671,35 @@ func (g *gitSource) command(ctx context.Context, dir string, args ...string) *ex
 		}
 		return os.ErrProcessDone
 	}
+	// WaitDelay bounds the post-kill pipe drain: Wait reads stdout until EOF,
+	// which a lingering subprocess could otherwise hold open past the context
+	// deadline and past the process-group kill.
+	cmd.WaitDelay = 10 * time.Second
 	return cmd
+}
+
+// retryAuthed reports whether a failed anonymous network attempt is worth
+// repeating with credentials. A private repo looks exactly like a missing one
+// to anonymous git (404 "not found"), so that is the main failure a token can
+// fix. An anonymous rate limit is the other: GitHub's git transport limits the
+// caller's IP, and an authenticated request has its own quota, so a token can
+// lift it too. Everything else - a real 404, a network fault, a server error -
+// fails the same way with or without auth.
+func (g *gitSource) retryAuthed(err error) bool {
+	return err != nil && g.tokens.size() > 0 &&
+		(errors.Is(err, errNotFound) || errors.Is(err, errRateLimit))
 }
 
 // run executes a git command and returns stdout.
 func (g *gitSource) run(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := g.command(ctx, dir, args...)
+	return g.runEnv(ctx, false, dir, args...)
+}
+
+// runEnv executes a git command, optionally with credentials, and returns
+// stdout. Local commands never need auth; network callers start anonymous and
+// retry with credentials only when retryAuthed says a token could help.
+func (g *gitSource) runEnv(ctx context.Context, authed bool, dir string, args ...string) ([]byte, error) {
+	cmd := g.command(ctx, dir, authed, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -585,7 +712,7 @@ func (g *gitSource) run(ctx context.Context, dir string, args ...string) ([]byte
 // start runs a git command and streams its stdout. The caller must close the
 // reader and Wait the command.
 func (g *gitSource) start(ctx context.Context, dir string, args ...string) (*exec.Cmd, io.ReadCloser, error) {
-	cmd := g.command(ctx, dir, args...)
+	cmd := g.command(ctx, dir, false, args...)
 	cmd.Stderr = io.Discard
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -600,8 +727,10 @@ func (g *gitSource) start(ctx context.Context, dir string, args ...string) (*exe
 // runCapped runs a network git command while watching how much disk it has
 // pulled, killing it if the repo blows past the per-repo cap. This bounds a
 // hostile or simply enormous repo before it fills the volume, instead of
-// discovering the problem after the download.
-func (g *gitSource) runCapped(ctx context.Context, dir, watch string, args ...string) ([]byte, error) {
+// discovering the problem after the download. authed selects credentialed vs
+// anonymous transport; callers start anonymous and retry authed (see
+// retryAuthed).
+func (g *gitSource) runCapped(ctx context.Context, authed bool, dir, watch string, args ...string) ([]byte, error) {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -624,7 +753,7 @@ func (g *gitSource) runCapped(ctx context.Context, dir, watch string, args ...st
 		}
 	}()
 
-	out, err := g.run(cctx, dir, args...)
+	out, err := g.runEnv(cctx, authed, dir, args...)
 	close(done)
 	if err != nil {
 		select {
@@ -655,7 +784,10 @@ func gitError(ctx context.Context, err error, stderr string) error {
 		strings.Contains(s, "access denied"),
 		strings.Contains(s, "invalid username or password"):
 		return errNotFound
-	case strings.Contains(s, "rate limit"), strings.Contains(s, "too many requests"):
+	case strings.Contains(s, "rate limit"), strings.Contains(s, "too many requests"),
+		// curl's bare HTTP-status phrasing ("...returned error: 429"), which
+		// is what anonymous throttling often looks like from git.
+		strings.Contains(s, "returned error: 429"):
 		return errRateLimit
 	}
 	// stderr can carry repo content (branch names, subjects) but never the
@@ -704,10 +836,10 @@ func safePathPart(s string) bool {
 // `ttl`, then evicts least-recently-used mirrors until the cache fits its disk
 // budget.
 //
-// A mirror in use is never evicted, and that needs no bookkeeping: every build
-// stamps its mirror's mtime, and a build cannot outlive the clone timeout that
-// wraps it. So a mirror whose mtime is older than that timeout is provably not
-// being read by anyone, which is the only kind this ever deletes.
+// Deletion is arbitrated by the mirror gate, not by timestamps: the sweep can
+// only remove a directory it managed to mark as deleting while no build held
+// it, so a fetch, a parse, or a build waiting for either is never evicted
+// mid-use. The mtime rules below are only how a directory becomes a candidate.
 func (g *gitSource) sweep() {
 	if !g.sweeping.TryLock() {
 		return // another pass is already running
@@ -726,14 +858,29 @@ func (g *gitSource) sweep() {
 	var mirrors []mirror
 	var total int64
 	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), ".git") {
+		if !e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.Contains(name, ".git.tmp") && !strings.HasSuffix(name, ".git") {
+			// Leftover clone dir from a process that was killed mid-clone.
+			// The build that owned it cannot outlive CLONE_TIMEOUT (the
+			// process group is killed at the deadline), so past that the
+			// tmp dir is provably abandoned. A valid mirror always ends in
+			// .git even when ".git.tmp" appears inside its repo name.
+			if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > g.timeout {
+				_ = os.RemoveAll(filepath.Join(g.dir, name))
+			}
+			continue
+		}
+		if !strings.HasSuffix(name, ".git") {
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		path := filepath.Join(g.dir, e.Name())
+		path := filepath.Join(g.dir, name)
 		size := dirSize(path)
 		total += size
 		idle := time.Since(info.ModTime())
@@ -741,8 +888,12 @@ func (g *gitSource) sweep() {
 			continue // possibly in use right now
 		}
 		if idle > g.ttl {
-			if os.RemoveAll(path) == nil {
-				total -= size
+			if g.gate.beginDelete(path) {
+				err := os.RemoveAll(path)
+				g.gate.endDelete(path)
+				if err == nil {
+					total -= size
+				}
 			}
 			continue
 		}
@@ -756,11 +907,77 @@ func (g *gitSource) sweep() {
 		if total <= g.diskCap {
 			return
 		}
-		if err := os.RemoveAll(m.path); err == nil {
+		// The mtime read above is as old as the dirSize walk. A build may
+		// have leased the mirror since; the gate refuses the delete then.
+		if !g.gate.beginDelete(m.path) {
+			continue
+		}
+		err := os.RemoveAll(m.path)
+		g.gate.endDelete(m.path)
+		if err == nil {
 			total -= m.size
 			log.Printf("git: evicted mirror %s (%d MB)", filepath.Base(m.path), m.size>>20)
 		}
 	}
+}
+
+// mirrorGate arbitrates one mirror directory between its builds and the sweep.
+//
+// The mtime lease alone (touch before use, sweep skips dirs younger than
+// CLONE_TIMEOUT) cannot close the eviction race: a sweep's Stat-then-RemoveAll
+// is not atomic against a build that leases the mirror in between, and two
+// builds sharing one mirror (same repo, different HEADs) can run a fetch and a
+// refetch's RemoveAll against each other. Every build holds its mirror's gate
+// from before ensureMirror until the parse is done, and the sweep may only
+// delete a directory it can mark as deleting while no build holds it.
+type mirrorGate struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	inUse    map[string]bool
+	deleting map[string]bool
+}
+
+func newMirrorGate() *mirrorGate {
+	g := &mirrorGate{inUse: map[string]bool{}, deleting: map[string]bool{}}
+	g.cond = sync.NewCond(&g.mu)
+	return g
+}
+
+// acquire blocks until dir is free and not being deleted.
+func (g *mirrorGate) acquire(dir string) {
+	g.mu.Lock()
+	for g.inUse[dir] || g.deleting[dir] {
+		g.cond.Wait()
+	}
+	g.inUse[dir] = true
+	g.mu.Unlock()
+}
+
+func (g *mirrorGate) release(dir string) {
+	g.mu.Lock()
+	delete(g.inUse, dir)
+	g.cond.Broadcast()
+	g.mu.Unlock()
+}
+
+// beginDelete marks dir as being removed unless a build holds it, in which
+// case it returns false and the caller must not delete. On true, the caller
+// owns the removal and must call endDelete when done.
+func (g *mirrorGate) beginDelete(dir string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inUse[dir] || g.deleting[dir] {
+		return false
+	}
+	g.deleting[dir] = true
+	return true
+}
+
+func (g *mirrorGate) endDelete(dir string) {
+	g.mu.Lock()
+	delete(g.deleting, dir)
+	g.cond.Broadcast()
+	g.mu.Unlock()
 }
 
 func dirSize(path string) int64 {

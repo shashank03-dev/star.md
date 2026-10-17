@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	"time"
@@ -64,36 +65,67 @@ func newSQLiteCache(path string) (Cache, error) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS cache(
 		key TEXT PRIMARY KEY,
 		blob BLOB NOT NULL,
-		fetched_at INTEGER NOT NULL
+		expires_at INTEGER NOT NULL
 	)`); err != nil {
 		return nil, err
+	}
+	// Migrate pre-expiry tables (the column used to hold the write time).
+	// Best-effort by design: on a fresh table the column is already named
+	// expires_at and the rename fails harmlessly. Rows from before the
+	// migration read as already expired, so the cache simply rewarns itself.
+	_, _ = db.Exec(`ALTER TABLE cache RENAME COLUMN fetched_at TO expires_at`)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS cache_expires_at ON cache(expires_at)`); err != nil {
+		return nil, err
+	}
+	// Prune once at startup so a long-idle cache reclaims its expired rows
+	// even if no later Put ever runs (pruning also rides every Put).
+	if _, err := db.Exec(`DELETE FROM cache WHERE expires_at <= ?`, time.Now().Unix()); err != nil {
+		log.Printf("cache: startup prune failed: %v", err)
 	}
 	return &sqliteCache{db: db, dsn: dsn}, nil
 }
 
+// cacheOpTimeout bounds every sqlite call: the cache is best-effort, so a
+// stalled disk should surface as a miss (or a swallowed write error), never as
+// a pinned handler.
+const cacheOpTimeout = 2 * time.Second
+
 func (c *sqliteCache) Get(key string) ([]byte, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), cacheOpTimeout)
+	defer cancel()
 	var blob []byte
-	var fetchedAt int64
-	err := c.db.QueryRow(`SELECT blob, fetched_at FROM cache WHERE key = ?`, key).
-		Scan(&blob, &fetchedAt)
+	var expiresAt int64
+	err := c.db.QueryRowContext(ctx, `SELECT blob, expires_at FROM cache WHERE key = ?`, key).
+		Scan(&blob, &expiresAt)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			log.Printf("cache: Get error for %q: %v", key, err)
 		}
 		return nil, false
 	}
-	if time.Since(time.Unix(fetchedAt, 0)) > 24*time.Hour {
-		return nil, false // stale; caller rebuilds
+	if time.Now().Unix() >= expiresAt {
+		return nil, false // expired; caller rebuilds
 	}
 	return blob, true
 }
 
 func (c *sqliteCache) Put(key string, blob []byte, ttl time.Duration) {
-	_, err := c.db.Exec(
-		`INSERT INTO cache(key, blob, fetched_at) VALUES(?, ?, ?)
-		 ON CONFLICT(key) DO UPDATE SET blob = excluded.blob, fetched_at = excluded.fetched_at`,
-		key, blob, time.Now().Unix())
+	ctx, cancel := context.WithTimeout(context.Background(), cacheOpTimeout)
+	defer cancel()
+	_, err := c.db.ExecContext(ctx,
+		`INSERT INTO cache(key, blob, expires_at) VALUES(?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET blob = excluded.blob, expires_at = excluded.expires_at`,
+		key, blob, time.Now().Add(ttl).Unix())
 	if err != nil {
 		log.Printf("cache: Put error for %q: %v", key, err)
+		return
+	}
+	// Opportunistic expiry: nothing else ever deletes from this table, so
+	// without this the cache would keep every repo@sha contract it has ever
+	// served. The expiry index makes this a range delete. The <= matches Get
+	// ("expired at this second" is not live), so no row can be served while
+	// prune considers it alive.
+	if _, err := c.db.ExecContext(ctx, `DELETE FROM cache WHERE expires_at <= ?`, time.Now().Unix()); err != nil {
+		log.Printf("cache: prune error: %v", err)
 	}
 }

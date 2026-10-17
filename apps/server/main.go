@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,13 +53,41 @@ func main() {
 	})
 	mux.HandleFunc("/api/starmap", s.handleStarmap)
 	mux.HandleFunc("/api/starmap/stream", s.handleStarmapStream)
-	mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	mux.Handle("/", denyDotfiles(http.FileServer(http.Dir(staticDir))))
 
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+		// No WriteTimeout: cold builds legitimately run for minutes and the
+		// stream endpoint writes for as long as they do. Reads are different:
+		// every endpoint is a GET whose body is ignored, so a tight read
+		// budget costs nothing and closes the socket-hold a trickled request
+		// would otherwise get.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
 	log.Printf("stellar-server listening on :%s (static=%s, cache=%s, mirrors=%s, tokens=%d)",
 		port, staticDir, dbPath, git.dir, tokens.size())
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// denyDotfiles refuses any static path with a dot-prefixed segment. STATIC_DIR
+// defaults to ".", so a server started from the repo root would otherwise
+// serve .git/ (config, refs, objects) and any .env file sitting beside it.
+// This checks the URL path only: dot-directories (including .well-known) are
+// denied wholesale, and a symlinked target is not resolved - keep links to
+// dotfiles out of STATIC_DIR.
+func denyDotfiles(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/.") {
+			http.NotFound(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *server) handleStarmap(w http.ResponseWriter, r *http.Request) {
@@ -150,9 +179,14 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 	// stays at zero REST calls and labels the PR honestly as squashed.
 	pulls := snap.PRs
 	if s.gh.tokens.size() > 0 && !hasSizedPR(pulls) {
-		if rest, err := s.gh.mergedPulls(ctx, repo); err == nil && len(rest) > 0 {
+		// The fallback is up to 9 serial REST calls; bound the whole phase so
+		// one stalled call cannot hold the build for the sum of their worst
+		// cases (CLONE_TIMEOUT does not cover it - the clone is already done).
+		pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		if rest, err := s.gh.mergedPulls(pctx, repo); err == nil && len(rest) > 0 {
 			pulls = rest
 		}
+		cancel()
 	}
 	emit(progressEvent{Phase: "history", Status: "progress", Resource: "pulls", Count: len(pulls)})
 	emit(progressEvent{Phase: "history", Status: "done"})

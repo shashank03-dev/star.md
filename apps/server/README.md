@@ -40,8 +40,13 @@ go -C apps/server build -o stellar-server . && STATIC_DIR=. ./apps/server/stella
 
 Then open http://localhost:8770/ or http://localhost:8770/map?repo=owner/name
 
-Auth is optional: public repos clone anonymously. Set `GITHUB_TOKEN` only for
-private repos or the merged-PR fallback above.
+Auth is optional: public repos clone anonymously, even when a token is set
+(network commands start anonymous and only retry with credentials when a repo
+presents as private, or when the anonymous transport is rate-limited), so a
+stale token cannot break public charting. Set `GITHUB_TOKEN` only for private
+repos or the merged-PR fallback above. Static files with dot-prefixed URL path
+segments (`.git`, `.env`) are rejected; symlinked targets are not resolved, so
+keep links to dotfiles out of `STATIC_DIR`.
 
 ## Config (env)
 
@@ -55,6 +60,7 @@ private repos or the merged-PR fallback above.
 | `CLONE_DIR` | `$TMPDIR/stellar-repos` | where bare mirrors live |
 | `CLONE_CONCURRENCY` | `4` | clones/fetches allowed to run at once |
 | `CLONE_TIMEOUT` | `10m` | per-build ceiling (clone + parse) |
+| `CLONE_PROBE_TIMEOUT` | `3m` | ceiling for the per-request HEAD probe (`git ls-remote`) |
 | `CLONE_MAX_MB` | `4096` | per-repo disk cap; a clone past it is killed |
 | `CLONE_DISK_MB` | `20480` | total mirror-cache budget before LRU eviction |
 | `CLONE_TTL` | `168h` | drop mirrors untouched for this long |
@@ -79,3 +85,7 @@ private repos or the merged-PR fallback above.
   instant until the repo gets a new commit. A cold build is one `git ls-remote`
   plus a blob-less bare clone parsed locally, bounded by `CLONE_TIMEOUT` and
   `CLONE_MAX_MB`. Warm requests are ~1s.
+- The SQLite cache and the mirror directory are single-instance local state:
+  never attach them to more than one replica (SQLite WAL is not safe on network
+  filesystems). Scale by routing repos to instances, or swap the 2-method
+  `Cache` interface for a shared store first.
