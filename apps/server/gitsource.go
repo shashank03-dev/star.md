@@ -95,7 +95,7 @@ type branchRec struct {
 type repoSnapshot struct {
 	Total    int               // commits reachable from HEAD
 	Commits  []commitRec       // newest-first, reduced to the sampled + milestone set
-	TagSHA   map[string]string // short sha -> tag name
+	TagSHA   map[string]string // full commit sha -> tag name
 	PRs      []prMerge
 	Branches []branchRec
 }
@@ -124,6 +124,31 @@ type gitSource struct {
 
 	gate     *mirrorGate // per-directory use vs sweep arbitration
 	sweeping sync.Mutex  // one eviction pass at a time
+
+	// tooLarge remembers repos that blew past maxBytes. The cap fails the same
+	// way on every visit, and without the memo each visit re-downloads up to
+	// the cap before failing again.
+	tooLargeMu sync.Mutex
+	tooLarge   map[string]time.Time
+}
+
+// tooLargeTTL bounds how long an oversized repo is refused without retrying.
+const tooLargeTTL = 30 * time.Minute
+
+func (g *gitSource) knownTooLarge(repo string) bool {
+	g.tooLargeMu.Lock()
+	defer g.tooLargeMu.Unlock()
+	until, ok := g.tooLarge[repo]
+	return ok && time.Now().Before(until)
+}
+
+func (g *gitSource) rememberTooLarge(repo string) {
+	g.tooLargeMu.Lock()
+	defer g.tooLargeMu.Unlock()
+	if g.tooLarge == nil || len(g.tooLarge) >= 1024 {
+		g.tooLarge = make(map[string]time.Time) // bounded, like headCache
+	}
+	g.tooLarge[repo] = time.Now().Add(tooLargeTTL)
 }
 
 type headMemo struct {
@@ -332,6 +357,9 @@ func (g *gitSource) buildSnapshot(ctx context.Context, repo, headSHA, defaultBra
 	if err != nil {
 		return nil, err
 	}
+	if g.knownTooLarge(repo) {
+		return nil, errRepoTooLarge
+	}
 
 	// Admission happens before acquiring the mirror gate. Every distinct
 	// cold build consumes at most one queue slot and has a finite wait budget,
@@ -371,6 +399,9 @@ func (g *gitSource) buildSnapshot(ctx context.Context, repo, headSHA, defaultBra
 	defer cancel()
 
 	if err := g.ensureMirror(cctx, repo, dir); err != nil {
+		if errors.Is(err, errRepoTooLarge) {
+			g.rememberTooLarge(repo)
+		}
 		return nil, err
 	}
 	defer func() { go g.sweep() }() // keep the mirror cache inside its disk budget
@@ -482,8 +513,10 @@ func (g *gitSource) parse(ctx context.Context, dir, headSHA, defaultBranch strin
 	}, nil
 }
 
-// tags returns short-sha -> tag name for the newest `tagWindow` tags.
-// Annotated tags are peeled to the commit they point at.
+// tags returns full commit sha -> tag name for the newest `tagWindow` tags.
+// Annotated tags are peeled to the commit they point at. Keys are full SHAs:
+// a 7-character prefix collides routinely in large histories, and a prefix
+// match would label an untagged commit as a release.
 func (g *gitSource) tags(ctx context.Context, dir string) (map[string]string, error) {
 	out, err := g.run(ctx, dir, "for-each-ref", "--sort=-creatordate",
 		"--count="+strconv.Itoa(tagWindow),
@@ -502,7 +535,7 @@ func (g *gitSource) tags(ctx context.Context, dir string) (map[string]string, er
 			sha = f[1] // lightweight tag: the ref is the commit
 		}
 		if sha != "" {
-			tags[short(sha)] = f[0]
+			tags[sha] = f[0]
 		}
 	}
 	return tags, nil
@@ -559,7 +592,7 @@ func (g *gitSource) history(ctx context.Context, dir, headSHA string, total int,
 				if f[1] != "" {
 					rec.Parents = strings.Fields(f[1])
 				}
-				if keep[i] || tagSHA[short(rec.SHA)] != "" {
+				if keep[i] || tagSHA[rec.SHA] != "" {
 					commits = append(commits, rec)
 				}
 				if len(prs) < prCandidates {
@@ -607,9 +640,11 @@ func parsePR(subject string, c commitRec) (prMerge, bool) {
 		n, _ := strconv.Atoi(m[2])
 		// A squash merge leaves no branch ref, so the PR title is the honest
 		// label. Trimmed to branch-name length so the legend stays balanced.
+		// Cut on a rune boundary: a byte cut can split a multi-byte
+		// character, which JSON encoding turns into U+FFFD.
 		title := strings.TrimSpace(m[1])
-		if len(title) > 32 {
-			title = strings.TrimSpace(title[:32]) + "…"
+		if r := []rune(title); len(r) > 32 {
+			title = strings.TrimSpace(string(r[:32])) + "…"
 		}
 		if n > 0 && title != "" {
 			return prMerge{Number: n, Ref: title, MergedAt: c.Committed, sha: c.SHA}, true

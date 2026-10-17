@@ -113,7 +113,12 @@ func (c *ghClient) get(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	// Bounded: a 100-PR list page is well under this, and a misbehaving proxy
+	// must not be able to make one build allocate without limit.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, err
+	}
 
 	switch {
 	case resp.StatusCode == 404:
