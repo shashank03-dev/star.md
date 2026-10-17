@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
-import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { Inter, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 
 // Self-hosted at build time (no external font request) - replaces the landing's
 // Google Fonts <link>. Exposed as CSS variables the page styles consume.
-// Three families, shared across both routes: Inter (UI sans), Instrument Serif
-// (display/label serif) and JetBrains Mono (the map's cartouche instrument type -
-// a loaded webfont so the star chart renders identically on every OS, instead of
-// the old OS-dependent system monospace).
+// One type pairing for the whole site, landing and star map alike: Inter for all
+// UI and instrument text, Instrument Serif (italic) for display names. Loaded
+// webfonts, so the star chart renders identically on every OS.
 const inter = Inter({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700", "800", "900"],
@@ -20,13 +19,6 @@ const instrumentSerif = Instrument_Serif({
   weight: "400",
   style: ["normal", "italic"],
   variable: "--font-instrument-serif",
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-jetbrains-mono",
   display: "swap",
 });
 
@@ -50,7 +42,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      className={`${inter.variable} ${instrumentSerif.variable}`}
     >
       <body>{children}</body>
     </html>
