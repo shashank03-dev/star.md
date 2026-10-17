@@ -4,3 +4,7 @@
 *.db
 *.db-shm
 *.db-wal
+.vercel/
+.env
+.env.*
+!.env.example
