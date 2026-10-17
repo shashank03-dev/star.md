@@ -67,8 +67,9 @@ container with `docker compose up --build`. If using `go run .` from
 Set the API project's root directory to `apps/server`. Vercel auto-detects
 `Dockerfile.vercel`, which installs Git, builds the Go server, and listens on
 `$PORT` (8080 in the image). Set the Vercel project environment variable
-`PORT=8080`, then set `UPSTASH_REDIS_REST_URL` and
-`UPSTASH_REDIS_REST_TOKEN` from the linked Upstash Marketplace Redis store.
+`PORT=8080`, then link an Upstash Marketplace Redis store. Its automatic
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` variables are used directly; alternatively,
+set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` explicitly.
 The service returns a typed 503 when this cache is missing in Vercel.
 Ephemeral `/tmp` mirrors are disposable; a shared SQLite file is unsuitable
 for separate Functions. The frontend Vercel project uses root `apps/web`,
@@ -88,7 +89,8 @@ queue/worker upgrade path.
 | `PORT` | `8770` | HTTP listen port (set Vercel project to 8080) |
 | `STATIC_DIR` | `.` | Serve static frontend locally; `-` disables |
 | `CACHE_DB` | `stellar-cache.db` | Local SQLite only |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Required on Vercel |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | unset | Injected by linked Upstash Marketplace Redis on Vercel |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Optional explicit Redis credentials; override Marketplace pair |
 | `GITHUB_TOKEN`, `GITHUB_TOKENS` | unset | Optional PR metadata and retry pool |
 | `CLONE_DIR`, `CLONE_TTL` | OS temp, 168h | Mirror path and local retention |
 | `CLONE_CONCURRENCY`, `CLONE_QUEUE_MAX`, `CLONE_QUEUE_TIMEOUT` | 4, 32, 20s | Admission control |

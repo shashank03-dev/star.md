@@ -18,6 +18,8 @@ func TestVercelRequiresSharedRedisWithoutSQLiteFallback(t *testing.T) {
 			t.Setenv("VERCEL", "1")
 			t.Setenv("UPSTASH_REDIS_REST_URL", tc.url)
 			t.Setenv("UPSTASH_REDIS_REST_TOKEN", tc.token)
+			t.Setenv("KV_REST_API_URL", "")
+			t.Setenv("KV_REST_API_TOKEN", "")
 			path := filepath.Join(t.TempDir(), "cache.db")
 			if cache := configuredCache(path); cache != nil {
 				t.Fatal("serverless backend fell back to a local cache")
@@ -29,10 +31,34 @@ func TestVercelRequiresSharedRedisWithoutSQLiteFallback(t *testing.T) {
 	}
 }
 
+func TestVercelMarketplaceRedisCredentials(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("UPSTASH_REDIS_REST_URL", "")
+	t.Setenv("UPSTASH_REDIS_REST_TOKEN", "")
+	t.Setenv("KV_REST_API_URL", "https://redis.example.com")
+	t.Setenv("KV_REST_API_TOKEN", "marketplace-token")
+	if _, ok := configuredCache(filepath.Join(t.TempDir(), "unused.db")).(*redisCache); !ok {
+		t.Fatal("Vercel Marketplace Redis REST variables were not accepted")
+	}
+}
+
+func TestVercelMarketplaceRedisRequiresPair(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("UPSTASH_REDIS_REST_URL", "")
+	t.Setenv("UPSTASH_REDIS_REST_TOKEN", "")
+	t.Setenv("KV_REST_API_URL", "https://redis.example.com")
+	t.Setenv("KV_REST_API_TOKEN", "")
+	if configuredCache(filepath.Join(t.TempDir(), "unused.db")) != nil {
+		t.Fatal("accepted incomplete marketplace Redis configuration")
+	}
+}
+
 func TestLocalConfigurationUsesSQLite(t *testing.T) {
 	t.Setenv("VERCEL", "")
 	t.Setenv("UPSTASH_REDIS_REST_URL", "")
 	t.Setenv("UPSTASH_REDIS_REST_TOKEN", "")
+	t.Setenv("KV_REST_API_URL", "")
+	t.Setenv("KV_REST_API_TOKEN", "")
 	path := filepath.Join(t.TempDir(), "local.db")
 	if cache := configuredCache(path); cache == nil {
 		t.Fatal("local SQLite fallback unavailable")

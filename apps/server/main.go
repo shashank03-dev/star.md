@@ -32,6 +32,12 @@ var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 func configuredCache(dbPath string) Cache {
 	var cache Cache
 	url, token := getenv("UPSTASH_REDIS_REST_URL"), getenv("UPSTASH_REDIS_REST_TOKEN")
+	if url == "" && token == "" {
+		// Vercel's Upstash Marketplace integration injects these KV-prefixed
+		// credentials automatically. Preserve the explicit Upstash override for
+		// deployments that configure it themselves.
+		url, token = getenv("KV_REST_API_URL"), getenv("KV_REST_API_TOKEN")
+	}
 	if getenv("VERCEL") != "" && (url == "" || token == "") {
 		// Vercel has ephemeral storage. A local SQLite cache here would make
 		// cold requests build independently on every Function instance.

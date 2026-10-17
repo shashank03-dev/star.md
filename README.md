@@ -52,7 +52,7 @@ This repo supports **two Vercel projects** connected to the same GitHub reposito
 
 | Project | Root directory | Deployment | Configuration |
 | --- | --- | --- | --- |
-| API | `apps/server` | `Dockerfile.vercel` container Function with Go + Git | Link Upstash Redis; set `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `PORT=8080` |
+| API | `apps/server` | `Dockerfile.vercel` container Function with Go + Git | Link Upstash Redis (`KV_REST_API_URL` and `KV_REST_API_TOKEN` injected automatically); set `PORT=8080` |
 | Website | `apps/web` | Next.js static export (`out`) | Set `NEXT_PUBLIC_API_BASE=https://YOUR-API.vercel.app` at build time |
 
 The API needs a container because the Git binary is required for partial cloning and parsing. Vercel Functions have **ephemeral local storage**; Redis is shared across instances. Configure the two projects and their environment variables before sending real traffic. Set the frontend root's **Include source files outside the Root Directory** option so it can access `packages/contract` and the workspace lockfile. The frontend refuses a Vercel build if the public API origin is missing or malformed.
@@ -122,7 +122,8 @@ NDJSON frames use `resolve`, `head`, `history`, and `map` progress phases, then 
 | `PORT` | 8770 | Set `PORT=8080` on the API project for its unprivileged container listener |
 | `STATIC_DIR` | `.` | `-` (API only) |
 | `CACHE_DB` | `stellar-cache.db` | Not used with Redis |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Unset | Required for Vercel shared cache/lease |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Unset | Injected by Upstash Marketplace for Vercel shared cache/lease |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Unset | Optional explicit Redis pair; takes precedence over `KV_*` variables |
 | `GITHUB_TOKEN` / `GITHUB_TOKENS` | Unset | Optional PR enrichment and rate-limit retry |
 | `ALLOW_PRIVATE_REPOS` | Not applicable to local fallback | Disabled on Vercel; **never enable publicly without auth** |
 | `CLONE_CONCURRENCY` | 4 | 1 per instance |
