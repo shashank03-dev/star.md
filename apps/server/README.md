@@ -13,8 +13,12 @@ does not affect Git history parsing or output semantics.
    Upstash Redis REST shares the cache across instances; local Docker uses
    SQLite.
 3. On a Vercel cache miss, acquire a short-lived Redis build lease so other
-   instances wait for the first completed contract. The local server also uses
-   `singleflight` and a per-repo mirror lock.
+   instances wait for the first completed contract. A waiter keeps waiting while
+   the lease is held, builds once itself if the lease is released without a
+   result, and returns `503 busy` quickly if Redis stops answering. The local
+   server also uses `singleflight` and a per-repo mirror lock. A repository
+   that exceeds `CLONE_MAX_MB` is refused for 30 minutes (in-process, and via
+   Redis on Vercel) rather than re-downloaded on every visit.
 4. Admit a bounded concurrent Git job, clone/fetch a blob-less bare mirror
    (`git clone --bare --filter=tree:0`), parse commits/branches/tags locally,
    and optionally enrich merged pull requests through GitHub REST.
