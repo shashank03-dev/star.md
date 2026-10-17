@@ -50,8 +50,7 @@ function ProtoStar({
     const SIZE = 260;
     cv.width = SIZE * DPR;
     cv.height = SIZE * DPR;
-    cv.style.width = SIZE + "px";
-    cv.style.height = SIZE + "px";
+    // display size comes from .proto-star (260px, smaller on phones)
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     const cx = SIZE / 2;
     const cy = SIZE / 2;

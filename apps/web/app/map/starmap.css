@@ -1,46 +1,55 @@
-/* Star-map styling, ported verbatim from the locked starmap-3d.html <style>.
+/* Star-map styling, ported from the locked starmap-3d.html <style> (chrome
+   typography and legibility since unified with the landing).
    Loaded only on the /map route (Next code-splits CSS per route), so the
    full-viewport html/body rules and generic class names do not leak to the
    landing page. The renderer creates .lbl / .cnr elements dynamically and
    depends on these exact class names - do not hash or rename them. */
 .starmap-root {
   /* ── Unified type system (shared with the analyzing overlay) ──
-     Fonts come from next/font (app/layout.tsx) so the star chart renders the
-     same on every OS. The serif matches the landing (Instrument Serif); the
-     mono is now a loaded webfont instead of the OS default. One ink ramp, one
-     tracking rhythm and one type scale drive every label so the chrome reads as
-     a single designed instrument rather than ad-hoc sizes. */
+     The same two families as the landing page, from next/font (app/layout.tsx):
+     Inter for every piece of UI/instrument text, Instrument Serif (italic) only
+     for display names - the genesis star, constellations, bayer letters, plate
+     title and the overlay lead line. One ink ramp, one tracking rhythm and one
+     type scale drive every label so the chrome reads as a single instrument. */
+  --sans: var(--font-inter), "Inter Placeholder", -apple-system, system-ui,
+    sans-serif;
   --serif: var(--font-instrument-serif), "Iowan Old Style", Georgia, serif;
-  --mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, Consolas,
-    monospace;
 
   /* ink ramp — cool star-chart greys, lifted for legibility over the bloom */
-  --ink-1: #e8eefb; /* primary: star names, display glyphs */
-  --ink-2: #b7c6dd; /* secondary: HUD values, bayer letters, plate title */
-  --ink-3: #8598b2; /* tertiary: category sublabels, overlay subline */
-  --ink-4: #6d809c; /* faint chrome: hint, plate meta (was ~#46586e) */
-  --ink-5: #4c5e76; /* dimmest: pending / inactive rows */
+  --ink-1: #f1f5fd; /* primary: star names, display glyphs */
+  --ink-2: #c9d5e8; /* secondary: HUD values, bayer letters, plate title */
+  --ink-3: #9fb0c8; /* tertiary: category sublabels, overlay subline */
+  --ink-4: #8193ad; /* faint chrome: hint, plate meta */
+  --ink-5: #5b6d86; /* dimmest: pending / inactive rows */
   --amber: #f0c079; /* single UI accent, matched to the landing --amber */
   --amber-soft: #fff3de; /* the genesis star's own warm (locked metaphor) */
-  --amber-dim: #9c8b6e; /* genesis category sublabel */
+  --amber-dim: #c9b28b; /* genesis category sublabel */
   --hair: rgba(96, 124, 158, 0.22);
 
+  /* legibility: chrome sits on a frosted ground so it reads over bright
+     nebula / bloom; labels in 3D space get a tight dark halo instead */
+  --glass: rgba(4, 6, 12, 0.5);
+  --glass-edge: rgba(140, 165, 195, 0.14);
+  --halo: 0 0 1px rgba(2, 3, 8, 0.95), 0 0 3px rgba(2, 3, 8, 0.9),
+    0 0 8px rgba(2, 3, 8, 0.75), 0 0 18px rgba(2, 3, 8, 0.6);
+
   /* type scale */
-  --fs-display: 24px; /* loading / analyzing lead line */
-  --fs-genesis: 20px;
-  --fs-name: 16px;
-  --fs-title: 15px; /* plate title */
-  --fs-bayer: 12.5px;
-  --fs-label: 10.5px; /* HUD, repo designation, task rows */
-  --fs-micro: 9.5px; /* plate meta, hint, category sublabels */
+  --fs-display: 26px; /* loading / analyzing lead line */
+  --fs-genesis: 21px;
+  --fs-name: 17px;
+  --fs-title: 17px; /* plate title */
+  --fs-bayer: 13px;
+  --fs-label: 11px; /* HUD, repo designation, task rows */
+  --fs-micro: 10px; /* plate meta, hint, category sublabels */
 
-  /* tracking — one uppercase-label rhythm */
-  --tr-micro: 0.22em;
-  --tr-label: 0.18em;
-  --tr-wide: 0.28em;
+  /* tracking — one uppercase-label rhythm (the landing's --tr-label is 0.14em) */
+  --tr-micro: 0.16em;
+  --tr-label: 0.14em;
+  --tr-wide: 0.2em;
 
-  /* mono figures line up in columns (telemetry counts, HUD readout) */
-  font-feature-settings: "tnum" 1;
+  font-family: var(--sans);
+  /* figures line up in columns (telemetry counts, HUD readout) */
+  font-variant-numeric: tabular-nums;
 }
 html:has(.starmap-root),
 body:has(.starmap-root) {
@@ -69,7 +78,8 @@ canvas.three {
   position: absolute;
   white-space: nowrap;
   transform: translate(-50%, -50%);
-  text-shadow: 0 0 14px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.9);
+  text-align: center;
+  text-shadow: var(--halo);
 }
 .lbl.name {
   font-family: var(--serif);
@@ -79,13 +89,19 @@ canvas.three {
   color: var(--ink-1);
 }
 .lbl.name .cat {
-  display: block;
-  font-family: var(--mono);
+  /* shrink-wrapped, centred chip: legible even over the brightest bloom */
+  display: table;
+  font-family: var(--sans);
   font-style: normal;
   font-size: var(--fs-micro);
+  font-weight: 500;
   letter-spacing: var(--tr-wide);
   color: var(--ink-3);
-  margin-top: 4px;
+  margin: 4px auto 0;
+  padding: 2px 7px 2px 8px;
+  background: rgba(4, 6, 12, 0.55);
+  border-radius: 2px;
+  text-shadow: none;
   text-transform: uppercase;
 }
 .lbl.genesis {
@@ -96,13 +112,19 @@ canvas.three {
   color: var(--amber-soft);
 }
 .lbl.genesis .cat {
-  display: block;
-  font-family: var(--mono);
+  /* shrink-wrapped, centred chip: legible even over the brightest bloom */
+  display: table;
+  font-family: var(--sans);
   font-style: normal;
   font-size: var(--fs-micro);
+  font-weight: 500;
   letter-spacing: var(--tr-wide);
   color: var(--amber-dim);
-  margin-top: 5px;
+  margin: 5px auto 0;
+  padding: 2px 7px 2px 8px;
+  background: rgba(4, 6, 12, 0.55);
+  border-radius: 2px;
+  text-shadow: none;
   text-transform: uppercase;
 }
 .lbl.bayer {
@@ -136,72 +158,93 @@ canvas.three {
   pointer-events: none;
 }
 
-#hud {
+/* HUD chrome: each block sits on a frosted cartouche so it stays legible when
+   the bloom or a nebula drifts behind it, without dimming the galaxy itself */
+#hud,
+#plate,
+#hint {
   position: absolute;
   z-index: 5;
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  backdrop-filter: blur(10px) saturate(115%);
+  text-shadow: 0 0 6px rgba(2, 3, 8, 0.6);
+}
+#hud {
   left: 40px;
   bottom: 38px;
   display: flex;
   align-items: center;
-  gap: 14px;
-  font-family: var(--mono);
+  gap: 16px;
+  padding: 5px 18px 5px 5px;
   font-size: var(--fs-label);
+  font-weight: 500;
   letter-spacing: var(--tr-label);
   text-transform: uppercase;
   color: var(--ink-3);
 }
 #hud button {
   pointer-events: auto;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: var(--fs-label);
+  font-weight: 600;
   letter-spacing: var(--tr-label);
   text-transform: uppercase;
-  color: var(--ink-2);
-  background: rgba(140, 165, 195, 0.07);
-  border: 1px solid rgba(140, 165, 195, 0.26);
+  color: var(--ink-1);
+  background: rgba(140, 165, 195, 0.1);
+  border: 1px solid rgba(140, 165, 195, 0.3);
   padding: 8px 15px;
   cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 #hud button:hover {
-  background: rgba(140, 165, 195, 0.16);
+  background: rgba(140, 165, 195, 0.2);
+  border-color: rgba(170, 195, 225, 0.45);
+}
+#hud button:focus-visible,
+#scrub:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: 3px;
 }
 #scrub {
   pointer-events: auto;
   width: 220px;
   -webkit-appearance: none;
   appearance: none;
-  height: 1px;
-  background: rgba(140, 165, 195, 0.28);
+  height: 2px;
+  background: rgba(160, 185, 215, 0.35);
   outline: none;
   cursor: pointer;
 }
 #scrub::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
-  background: #dce7f7;
+  background: #eef3fc;
+  box-shadow: 0 0 0 3px rgba(4, 6, 12, 0.55), 0 0 10px rgba(220, 231, 247, 0.5);
 }
 #scrub::-moz-range-thumb {
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border: none;
   border-radius: 50%;
-  background: #dce7f7;
+  background: #eef3fc;
+  box-shadow: 0 0 0 3px rgba(4, 6, 12, 0.55), 0 0 10px rgba(220, 231, 247, 0.5);
 }
 #readout {
-  min-width: 150px;
-  color: var(--ink-2);
+  min-width: 132px;
+  color: var(--ink-1);
 }
 
 #plate {
-  position: absolute;
-  z-index: 5;
   top: 40px;
   right: 44px;
+  padding: 11px 16px 10px;
   text-align: right;
-  font-family: var(--mono);
   font-size: var(--fs-micro);
+  font-weight: 500;
   letter-spacing: var(--tr-micro);
   text-transform: uppercase;
   color: var(--ink-4);
@@ -211,23 +254,54 @@ canvas.three {
   display: block;
   font-family: var(--serif);
   font-style: italic;
+  font-weight: 400;
   font-size: var(--fs-title);
   letter-spacing: 0.02em;
-  color: var(--ink-2);
+  color: var(--ink-1);
   text-transform: none;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 #hint {
-  position: absolute;
-  z-index: 5;
   left: 40px;
   top: 40px;
-  font-family: var(--mono);
+  padding: 7px 12px;
   font-size: var(--fs-micro);
+  font-weight: 500;
   letter-spacing: var(--tr-micro);
   text-transform: uppercase;
-  color: var(--ink-4);
-  line-height: 2;
+  color: var(--ink-3);
+  line-height: 1.6;
+}
+
+/* small screens: the plate and hint would collide and the HUD would run off
+   the right edge - drop the hint (touch users orbit by instinct), compact the
+   plate and let the scrubber flex to the available width */
+@media (max-width: 720px) {
+  #hint {
+    display: none;
+  }
+  #plate {
+    top: 34px;
+    right: 34px;
+    padding: 8px 12px 7px;
+    line-height: 1.7;
+  }
+  #hud {
+    left: 34px;
+    right: 34px;
+    bottom: 34px;
+    gap: 12px;
+    padding-right: 14px;
+  }
+  #scrub {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+  }
+  #readout {
+    min-width: 0;
+    white-space: nowrap;
+  }
 }
 
 /* loading / error overlays - styled to match the cartouche language */
@@ -255,7 +329,7 @@ canvas.three {
   color: var(--ink-1);
 }
 #overlay .sub {
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: var(--fs-label);
   letter-spacing: var(--tr-wide);
   text-transform: uppercase;

@@ -1,8 +1,8 @@
 /* The space-themed waiting page + shockwave warp, loaded only on /map alongside
    starmap.css. Deliberately speaks the same cartouche language as the star map
-   (mono/serif type, #03050a ground, corner ticks) so the two feel continuous:
-   the warp then dissolves this into the genesis ignition. Variables --serif /
-   --mono come from .starmap-root. */
+   (Inter UI type + Instrument Serif display, #03050a ground, corner ticks) so
+   the two feel continuous: the warp then dissolves this into the genesis
+   ignition. Variables --serif / --sans come from .starmap-root. */
 
 .analyzing {
   position: fixed;
@@ -80,7 +80,7 @@
   align-items: center;
   gap: 22px;
   padding: 24px;
-  width: min(440px, 86vw);
+  width: min(480px, calc(100vw - 64px));
 }
 
 .proto-star {
@@ -102,10 +102,10 @@
 }
 .an-repo {
   margin-top: 8px;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: var(--fs-label);
-  letter-spacing: var(--tr-wide);
-  text-transform: lowercase;
+  font-weight: 500;
+  letter-spacing: 0.06em;
   color: var(--ink-3);
 }
 
@@ -115,8 +115,9 @@
   margin: 4px 0 0;
   padding: 0;
   width: 100%;
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: var(--fs-label);
+  font-weight: 500;
   letter-spacing: var(--tr-label);
   text-transform: uppercase;
 }
@@ -126,8 +127,11 @@
   align-items: baseline;
   gap: 4px 10px;
   padding: 7px 0;
-  border-bottom: 1px solid rgba(96, 124, 158, 0.09);
+  border-bottom: 1px solid rgba(96, 124, 158, 0.12);
   transition: color 0.4s ease;
+}
+.an-task .an-label {
+  min-width: 0;
 }
 .an-task .an-tick {
   text-align: center;
@@ -135,8 +139,9 @@
 }
 .an-task .an-detail {
   font-size: var(--fs-micro);
-  letter-spacing: var(--tr-label);
-  color: var(--ink-4);
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+  white-space: nowrap;
   text-transform: none;
 }
 .an-task.pending {
@@ -209,16 +214,17 @@
   max-width: 340px;
 }
 .an-error-msg {
-  font-family: var(--mono);
-  font-size: var(--fs-label);
-  line-height: 1.9;
-  letter-spacing: var(--tr-label);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  letter-spacing: 0;
   color: var(--ink-2);
   margin: 0 0 20px;
 }
 .an-retry {
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: var(--fs-label);
+  font-weight: 600;
   letter-spacing: var(--tr-label);
   text-transform: uppercase;
   color: var(--ink-2);
@@ -229,6 +235,10 @@
 }
 .an-retry:hover {
   background: rgba(140, 165, 195, 0.16);
+}
+.an-retry:focus-visible {
+  outline: 1px solid var(--amber);
+  outline-offset: 3px;
 }
 
 /* the shockwave / warp — full-screen, above everything, non-interactive */
@@ -254,6 +264,24 @@
   );
   opacity: 0;
   will-change: opacity;
+}
+
+/* phones: details drop under their label instead of squeezing it onto two
+   lines, and the proto-star gives the checklist room */
+@media (max-width: 520px) {
+  .proto-star {
+    width: 200px;
+    height: 200px;
+  }
+  .an-task {
+    grid-template-columns: 18px 1fr;
+  }
+  .an-task .an-detail {
+    grid-column: 2;
+  }
+  .an-subs {
+    grid-column: 2;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

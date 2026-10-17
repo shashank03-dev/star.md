@@ -699,15 +699,25 @@ export function initStarMap(
     }
 
     /* ─────────── labels ─────────── */
+    // Labels are built from text nodes, never innerHTML: branch names and PR
+    // refs come straight from the repository, and git allows names such as
+    // `<svg/onload=...>` that would otherwise execute on /map.
     function mkLabel(
-      html: string,
+      text: string,
+      cat: string | null,
       cls: string,
       pos: THREE.Vector3,
       off?: THREE.Vector3,
     ): HTMLDivElement {
       const d = document.createElement("div");
       d.className = "lbl " + cls;
-      d.innerHTML = html;
+      d.textContent = text;
+      if (cat != null) {
+        const c = document.createElement("span");
+        c.className = "cat";
+        c.textContent = cat;
+        d.appendChild(c);
+      }
       d.style.opacity = "0";
       const o = new CSS2DObject(d);
       o.position.copy(pos).add(off || new THREE.Vector3());
@@ -716,14 +726,16 @@ export function initStarMap(
       return d;
     }
     const genesisEl = mkLabel(
-      `Genesis<span class="cat">${REPO} · initial commit</span>`,
+      "Genesis",
+      REPO + " · initial commit",
       "genesis",
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(0, -2.6, 0),
     );
     const branchEls = branches.map((b) =>
       mkLabel(
-        `${b.n}<span class="cat">${b.sub}</span>`,
+        b.n,
+        b.sub,
         "name",
         b.alpha.pos,
         new THREE.Vector3(0, -1.7, 0),
@@ -733,7 +745,7 @@ export function initStarMap(
       b.nodes
         .filter((n) => n.tier >= 2)
         .map((n) => ({
-          el: mkLabel(n.bayer!, "bayer", n.pos, new THREE.Vector3(0.75, 0.55, 0)),
+          el: mkLabel(n.bayer!, null, "bayer", n.pos, new THREE.Vector3(0.75, 0.55, 0)),
           n,
         })),
     );

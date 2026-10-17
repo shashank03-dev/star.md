@@ -154,9 +154,11 @@ export default function StarMap() {
           <input type="range" id="scrub" min={0} max={1000} defaultValue={0} />
           <span id="readout">—</span>
         </div>
-        {/* the renderer's own overlay stays present (it hides itself when a model
-            is injected); our AnalyzingOverlay layers above it during analysis */}
-        <div id="overlay">
+        {/* the renderer's own overlay stays in the DOM (initStarMap looks it up)
+            but starts hidden: the model is always injected here, and
+            AnalyzingOverlay owns loading/error. Left visible, its duplicate
+            "Charting the heavens" + spinner showed through the warp. */}
+        <div id="overlay" className="hidden">
           <div className="spinner" />
           <div className="glyph" id="ovGlyph">
             Charting the heavens
@@ -221,8 +223,11 @@ function buildStages(p: Prog, phase: Phase): StageView[] {
     id: "head",
     label: "Reading HEAD · counting commits",
     status: st(p.headDone, p.resolveDone),
+    // a cache miss reports HEAD before the clone has counted anything; the
+    // total arrives in a second head frame, so don't show "0 commits" meanwhile
     detail: p.headDone
-      ? (p.cached ? "cached · " : "") + nf.format(p.commitTotal ?? 0) + " commits"
+      ? (p.cached ? "cached · " : "") +
+        (p.commitTotal !== undefined ? nf.format(p.commitTotal) + " commits" : "counting…")
       : undefined,
   };
 
