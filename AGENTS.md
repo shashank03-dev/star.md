@@ -21,12 +21,16 @@ background, star effect as a CTA-sized component not a full-bleed hero. Treat
 
 ## Landing hero (apps/web, Next.js 16 static export, React 19)
 
-3D-depth scene: deep-space canvas sky (`StarSky`), floating star-map window, layered horizon
-from two alpha-cutout webps (`horizon-far.webp` behind, `horizon-near.webp` occluding the
-lower edge). Key files: `components/Landing.tsx`, `app/landing.css`, `components/Legend.tsx`,
-`lib/anim.ts` (lazy Lenis+GSAP+ScrollTrigger loader, one shared ticker),
-`components/MapPreview.tsx`, `scripts/horizon.py` (regenerates horizons from
-`horizon-source.jpg`; run from `apps/web`).
+3D-depth scene: realistic canvas sky (`StarSky`: Milky Way dust band, magnitude-distributed
+black-body stars, rare spiked stars, meteors), floating star-map window with an RA/Dec
+reticle, layered horizon from two alpha-cutout webps (`horizon-far.webp` behind,
+`horizon-near.webp` occluding the lower edge). Flow: hero -> legend (pinned scrub) -> README
+embed (`components/landing/Embed.tsx`, real badge preview + copy snippet) -> closing field.
+Type: Mona Sans (wide, display), Geist (body), Geist Mono (labels). Key files:
+`components/Landing.tsx`, `app/landing.css`, `components/Legend.tsx`,
+`components/landing/RepoForm.tsx`, `lib/site.ts` (public URLs/examples), `lib/anim.ts` (lazy
+Lenis+GSAP+ScrollTrigger loader, one shared ticker), `components/MapPreview.tsx`,
+`scripts/horizon.py` (regenerates horizons from `horizon-source.jpg`; run from `apps/web`).
 
 - The hero pin sits above the legend, so its ScrollTrigger needs `refreshPriority: 1`
   (HIGHER refreshes earlier) or legend triggers desync.

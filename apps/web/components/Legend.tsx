@@ -31,7 +31,7 @@ const BEATS: Beat[] = [
     short: "Initial commit",
     term: "Initial commit",
     celest: "the genesis star",
-    desc: "Position zero, at the centre of it all. The largest, warmest star - it ignites alone, before any history exists to grow around it.",
+    desc: "Position zero. The largest, warmest star on the chart, and the only one lit before any history exists.",
     glyph: (
       <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <defs>
@@ -57,7 +57,7 @@ const BEATS: Beat[] = [
     short: "Every commit",
     term: "Every commit",
     celest: "a star",
-    desc: "Placed by its timestamp and sized in four magnitude tiers - the brightest earn diffraction spikes. Real points, chosen from your history, never invented.",
+    desc: "Placed by its timestamp and sized in four magnitude tiers; only the brightest earn diffraction spikes. Every point is a real commit.",
     glyph: (
       <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <g fill="#DCE7FF">
@@ -80,7 +80,7 @@ const BEATS: Beat[] = [
     short: "Each branch",
     term: "Each branch",
     celest: "a constellation",
-    desc: "Its shape is drawn from the branch's own name, so no two look alike - and the same history always charts the same sky.",
+    desc: "Its shape comes from the branch's own name, so no two look alike, and the same history always draws the same sky.",
     glyph: (
       <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <polyline
@@ -107,7 +107,7 @@ const BEATS: Beat[] = [
     short: "Pull requests",
     term: "Pull requests",
     celest: "the lines home",
-    desc: "Dotted merges trace each branch back to the trunk, with light flowing along every edge from parent commit to child.",
+    desc: "Dotted lines trace each merge back to the trunk, with light flowing along every edge from parent to child.",
     glyph: (
       <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <line
@@ -143,7 +143,7 @@ const BEATS: Beat[] = [
     short: "Releases",
     term: "Releases",
     celest: "milestones",
-    desc: "The bright, named stars - the moments your history was worth marking, ringed so they hold their place as the galaxy grows.",
+    desc: "Tagged releases become the bright, ringed stars: the moments your history thought worth marking.",
     glyph: (
       <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
         <circle
@@ -288,11 +288,10 @@ export default function Legend() {
         viewport={{ once: true, margin: "-10% 0px -10% 0px" }}
       >
         <div className="k">The legend</div>
-        <h2>Everything in your history has a place in the sky.</h2>
-        <p>
-          The map isn&apos;t decoration. Every mark on it is a real point in your
-          repository, read straight from public history - watch one build.
-        </p>
+        <h2>
+          Everything in your history has <span className="glow">a place in the sky.</span>
+        </h2>
+        <p>Each mark is a real point read from Git. Scroll, and watch a chart build itself.</p>
       </motion.div>
 
       {/* desktop: the REAL star map builds itself as you scroll (its growth
@@ -404,30 +403,6 @@ export default function Legend() {
         ))}
       </div>
 
-      <motion.div
-        className="coda"
-        variants={reveal}
-        initial="hidden"
-        whileInView="show"
-        viewport={{ once: true, margin: "-10% 0px -10% 0px" }}
-      >
-        <p>
-          Embed the map in your README and it re-charts itself on every push -{" "}
-          <b>always current, always yours.</b>
-        </p>
-        <a href="#cta" className="btn btn-primary again">
-          Chart your repository
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M5 12h14M13 6l6 6-6 6"
-              stroke="#fff"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </a>
-      </motion.div>
     </section>
   );
 }
