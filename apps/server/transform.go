@@ -122,7 +122,7 @@ func buildMain(commits []commitRec, tagSHA map[string]string) []MainNode {
 	isMilestone := make([]bool, n)
 	label := make([]string, n)
 	for i, c := range commits {
-		if lbl, ok := tagSHA[short(c.SHA)]; ok {
+		if lbl, ok := tagSHA[c.SHA]; ok {
 			isMilestone[i] = true
 			label[i] = lbl
 		}

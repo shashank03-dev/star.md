@@ -77,3 +77,32 @@ func TestBuildBranchesDedupesByPRNumberNotTitle(t *testing.T) {
 		t.Fatalf("len(branches) = %d, want 2 (same-title PRs are distinct)", len(out))
 	}
 }
+
+// Tags must be matched on the full commit SHA. In a large history two commits
+// routinely share a 7-character prefix, and a prefix match would label an
+// untagged commit as a release (and force it into the sampled trunk).
+func TestBuildMainTagMatchesFullSHANotPrefix(t *testing.T) {
+	base := time.Unix(1700000000, 0).UTC()
+	tagged := "abcdef0111111111111111111111111111111111"
+	commits := []commitRec{
+		{SHA: tagged, Committed: base.Add(2 * time.Hour)},                                 // HEAD, tagged
+		{SHA: "abcdef0222222222222222222222222222222222", Committed: base.Add(time.Hour)}, // same short SHA, untagged
+		{SHA: "9999999999999999999999999999999999999999", Committed: base},                // genesis
+	}
+	out := buildMain(commits, map[string]string{tagged: "v1.0.0"})
+	releases := 0
+	for _, n := range out {
+		if n.Type == "release" {
+			releases++
+			if n.Label != "v1.0.0" {
+				t.Errorf("release label = %q", n.Label)
+			}
+		}
+	}
+	if releases != 1 {
+		t.Fatalf("releases = %d, want exactly 1 (prefix collision must not tag a second commit)", releases)
+	}
+	if out[len(out)-1].Type != "release" {
+		t.Errorf("tagged HEAD = %+v, want release", out[len(out)-1])
+	}
+}

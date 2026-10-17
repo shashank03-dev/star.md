@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // testSource builds a gitSource with just the fields sweep() reads.
@@ -669,5 +670,39 @@ func TestSweepEvictsLRUOverDiskCap(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Errorf("fresh (possibly in-use) mirror was evicted: %v", err)
+	}
+}
+
+// A long squash-merge title is shortened for the legend. Cutting at a byte
+// offset can split a multi-byte character, which json.Marshal then turns into
+// U+FFFD on the star map.
+func TestParsePRSquashTitleTruncatesOnRuneBoundary(t *testing.T) {
+	subject := strings.Repeat("界", 40) + " (#7)"
+	pr, ok := parsePR(subject, commitRec{SHA: "abc"})
+	if !ok {
+		t.Fatal("squash subject not recognised")
+	}
+	if !utf8.ValidString(pr.Ref) || strings.ContainsRune(pr.Ref, utf8.RuneError) {
+		t.Fatalf("truncated title is not valid UTF-8: %q", pr.Ref)
+	}
+	if !strings.HasSuffix(pr.Ref, "…") {
+		t.Errorf("long title not marked as truncated: %q", pr.Ref)
+	}
+}
+
+// A repository over CLONE_MAX_MB fails the same way on every visit. Without a
+// memo each visit re-downloads up to the cap before failing again.
+func TestBuildSnapshotMemoizesRepoTooLarge(t *testing.T) {
+	log := fakeGit(t, "clone-big-fast")
+	g := &gitSource{dir: t.TempDir(), home: t.TempDir(), maxBytes: 1024,
+		tokens: &tokenPool{}, sem: make(chan struct{}, 1), gate: newMirrorGate(),
+		timeout: time.Minute}
+	for i := 0; i < 3; i++ {
+		if _, err := g.buildSnapshot(context.Background(), "a/b", "head", "main"); !errors.Is(err, errRepoTooLarge) {
+			t.Fatalf("attempt %d: err = %v, want repo_too_large", i, err)
+		}
+	}
+	if n := strings.Count(readCallLog(t, log), "ARGS:"); n != 1 {
+		t.Fatalf("git invoked %d times for an oversized repo, want 1 (later visits served from the memo)", n)
 	}
 }

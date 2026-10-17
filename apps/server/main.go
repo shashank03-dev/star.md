@@ -235,9 +235,28 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 	}
 	buildCtx := ctx
 	if s.lease != nil {
-		release, acquired := s.lease.tryBuildLease(key)
-		if !acquired {
-			blob, err := s.waitForBuild(ctx, key)
+		if s.lease.knownTooLarge(repo) {
+			return nil, errRepoTooLarge
+		}
+		var release func()
+		for attempt := 0; release == nil; attempt++ {
+			r, acquired := s.lease.tryBuildLease(key)
+			if acquired {
+				release = r
+				break
+			}
+			// Another instance is building this exact repo@HEAD. Keep the
+			// stream alive while it works: the wait can last as long as a
+			// cold build does.
+			stop := keepalive(emit)
+			blob, err := s.waitForBuild(ctx, repo, key)
+			stop()
+			if errors.Is(err, errLeaseReleased) {
+				if attempt == 0 {
+					continue // the winner failed: build it here, once
+				}
+				err = errBusy
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -275,6 +294,9 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 	snap, err := s.git.snapshot(buildCtx, repo, headSHA, defaultBranch)
 	stop()
 	if err != nil {
+		if errors.Is(err, errRepoTooLarge) && s.lease != nil {
+			s.lease.rememberTooLarge(repo) // spare the other instances the download
+		}
 		return nil, err
 	}
 	if len(snap.Commits) == 0 {
