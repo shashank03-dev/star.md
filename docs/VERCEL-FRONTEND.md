@@ -3,6 +3,8 @@
 This Vercel project hosts the **static Next.js frontend**. A second Vercel
 project hosts the Go API as a container Function on a separate HTTPS origin.
 The existing combined local Docker setup remains available.
+Current production: [Stellar website](https://stellar-web-taupe.vercel.app/)
+and [Go API](https://stellar-api-shashank03-devs-projects.vercel.app/readyz).
 The frontend's `apps/web/next.config.ts` already uses `output: "export"`, so
 `pnpm build` writes static files to `apps/web/out/`. The app does not need a
 Next.js server or Vercel Functions at runtime.
@@ -33,7 +35,7 @@ Under **Project Settings → Environment Variables**, add:
 
 | Name | Value | Environments |
 | --- | --- | --- |
-| `NEXT_PUBLIC_API_BASE` | `https://api.example.com` (replace with the actual Go API origin) | **Production** and **Preview** (and other build targets you use) |
+| `NEXT_PUBLIC_API_BASE` | `https://stellar-api-shashank03-devs-projects.vercel.app` for this deployment | **Production** and **Preview** (and other build targets you use) |
 
 Set the value to the HTTPS **origin only**: no `/api`, path, query string, or
 trailing `/`. The static client already adds `/api/starmap` or

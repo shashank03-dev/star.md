@@ -4,22 +4,24 @@ Stellar visualizes a repository's real commit history as an animated, interactiv
 
 Explore the galaxy in the browser or embed a **live, repository-specific galaxy image** in a GitHub README. The embed is a real animated GIF or static SVG generated from the same backend data that drives the interactive view.
 
-**Status (October 2026):** The Go analyzer, 3D website, SVG/GIF endpoints, and Vercel deployment configuration are implemented and tested locally. Production deployment requires creating the Vercel projects, linking Upstash Redis, and setting the API URL. Example domains below are placeholders. **No hosted badge URL is live yet.**
+**Live on Vercel (October 2026):** [Open Stellar](https://stellar-web-taupe.vercel.app/) · [Explore this repository](https://stellar-web-taupe.vercel.app/map/?repo=shashank03-dev/star.md) · [API readiness](https://stellar-api-shashank03-devs-projects.vercel.app/readyz). The two projects deploy directly from `main`; the Go API uses a shared Upstash Redis cache. Production checks confirmed live repository analysis, streaming, SVG/GIF badges, and 16 concurrent cached requests.
+
+[![Stellar galaxy for star.md](https://stellar-api-shashank03-devs-projects.vercel.app/api/badge.gif?repo=shashank03-dev/star.md)](https://stellar-web-taupe.vercel.app/map/?repo=shashank03-dev/star.md)
 
 ## Embed your repository galaxy
 
-Once the Stellar API is deployed, add either snippet to your repository's `README.md`. Replace `YOUR-API.vercel.app` with the deployed API hostname, and `OWNER/REPO` with your GitHub repository.
+Add either snippet to your repository's `README.md`. Replace `OWNER/REPO` with your public GitHub repository; the production service URL is already included.
 
 **Animated galaxy (GIF; growth from genesis to HEAD):**
 
 ```md
-[![My repository galaxy](https://YOUR-API.vercel.app/api/badge.gif?repo=OWNER/REPO)](https://YOUR-WEB.vercel.app/map/?repo=OWNER/REPO)
+[![My repository galaxy](https://stellar-api-shashank03-devs-projects.vercel.app/api/badge.gif?repo=OWNER/REPO)](https://stellar-web-taupe.vercel.app/map/?repo=OWNER/REPO)
 ```
 
 **Static galaxy (SVG; compact, medium, or large):**
 
 ```md
-[![My repository galaxy](https://YOUR-API.vercel.app/api/badge?repo=OWNER/REPO&size=medium)](https://YOUR-WEB.vercel.app/map/?repo=OWNER/REPO)
+[![My repository galaxy](https://stellar-api-shashank03-devs-projects.vercel.app/api/badge?repo=OWNER/REPO&size=medium)](https://stellar-web-taupe.vercel.app/map/?repo=OWNER/REPO)
 ```
 
 The image links to the full interactive map. GitHub README images cannot execute JavaScript or WebGL, so they **cannot embed the interactive Three.js scene**. Stellar renders the GIF and SVG on the server from your repository's commit contract; they represent the galaxy with a lightweight 2D projection suitable for GitHub's image proxy. The GIF loops through 11 growth frames (720 × 200 pixels); SVG sizes are `compact`, `medium` (default), and `large`.
@@ -53,11 +55,11 @@ This repo supports **two Vercel projects** connected to the same GitHub reposito
 | Project | Root directory | Deployment | Configuration |
 | --- | --- | --- | --- |
 | API | `apps/server` | `Dockerfile.vercel` container Function with Go + Git | Link Upstash Redis (`KV_REST_API_URL` and `KV_REST_API_TOKEN` injected automatically); set `PORT=8080` |
-| Website | `apps/web` | Next.js static export (`out`) | Set `NEXT_PUBLIC_API_BASE=https://YOUR-API.vercel.app` at build time |
+| Website | `apps/web` | Next.js static export (`out`) | Set `NEXT_PUBLIC_API_BASE=https://stellar-api-shashank03-devs-projects.vercel.app` at build time |
 
 The API needs a container because the Git binary is required for partial cloning and parsing. Vercel Functions have **ephemeral local storage**; Redis is shared across instances. Configure the two projects and their environment variables before sending real traffic. Set the frontend root's **Include source files outside the Root Directory** option so it can access `packages/contract` and the workspace lockfile. The frontend refuses a Vercel build if the public API origin is missing or malformed.
 
-The API's `/readyz` checks the Git executable and cache configuration; `/api/status` exposes local active/waiting jobs. Clone and disk limits are enforced per Function. Heavy repositories may exceed these limits and return a typed error; protecting the service from overload is preferable to hanging all requests. Redis leases coalesce concurrent cold builds across instances, and retries after overload are supported with `Retry-After`. Production traffic testing, cost/quotas, GitHub image proxy behavior, and Vercel Observability still require a live deployment.
+The API's `/readyz` checks the Git executable and cache configuration; `/api/status` exposes local active/waiting jobs. Clone and disk limits are enforced per Function. Heavy repositories may exceed these limits and return a typed error; protecting the service from overload is preferable to hanging all requests. Redis leases coalesce concurrent cold builds across instances, and retries after overload are supported with `Retry-After`. The production smoke test and a small concurrent cached-request test passed; larger-scale load testing and ongoing usage/quotas still need monitoring.
 
 Full deployment instructions and operational limits: [Vercel architecture](docs/VERCEL-ARCHITECTURE.md) and [frontend deployment](docs/VERCEL-FRONTEND.md).
 

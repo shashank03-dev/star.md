@@ -21,7 +21,7 @@ Browser → static Vercel web → Go API /api/starmap[/stream]
 4. In the web project, configure `NEXT_PUBLIC_API_BASE=https://<api-project-domain>` as a **build-time** environment variable (omit a trailing slash). Run the standard Next.js build; `apps/web/next.config.ts` retains static export and original visuals. This direct-origin approach uses the API's CORS headers. If using custom domains, point this at the API domain.
 5. Verify `GET /readyz` on the API returns `200 ready`; `503 backend unavailable` means Git or required serverless cache is absent. Verify a small public repo using `/api/starmap?repo=octocat/Hello-World` and an actual embedded `/api/badge?repo=octocat/Hello-World` image, then `/api/starmap/stream?repo=octocat/Hello-World`. Run a bounded concurrent traffic test before advertising to a large audience.
 
-**Vercel account state:** No Stellar Vercel project was found during the 2026-10-17 inspection. Connecting the GitHub repository, provisioning Marketplace Redis, configuring domains/environment variables, and verifying real production logs are deployment steps rather than properties a local build can prove.
+**Production setup (2026-10-17):** The `stellar-api` container project and `stellar-web` static project are linked to `shashank03-dev/star.md` and deploy from `main`. Upstash for Redis is connected to the API for production and preview through its automatic `KV_REST_API_*` variables. Production origins are `https://stellar-api-shashank03-devs-projects.vercel.app` and `https://stellar-web-taupe.vercel.app`. The API returned 200 for `/readyz`, a public repository JSON contract, SVG/GIF badges, and the terminal NDJSON progress stream; 16 concurrent cached contract requests all succeeded. These bounded checks do not establish unlimited concurrency or fault tolerance.
 
 ## Backend traffic and limits
 
@@ -57,4 +57,4 @@ The current on-demand function path supports bounded workloads. To serve very la
 - [Vercel Queues](https://vercel.com/docs/queues)
 - [Vercel Sandbox](https://vercel.com/docs/sandbox)
 
-Local tests prove API behavior and compilation; they cannot validate a Vercel deployment, its Git transport access, paid resource quotas, or real-world traffic until a project is configured and tested there.
+Local tests verify API behavior and compilation, and the deployed smoke checks verify Git transport and HTTP responses. Monitor real traffic, cold-cache load, provider quotas, and function costs through Vercel and Upstash before increasing exposure.
