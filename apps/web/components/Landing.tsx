@@ -148,7 +148,7 @@ export default function Landing() {
       const h = x * 24;
       const d = (0.5 - y) * 180;
       if (ra) ra.textContent = `${pad(h)}h ${pad((h % 1) * 60)}m`;
-      if (dec) dec.textContent = `${d < 0 ? "−" : "+"}${pad(Math.abs(d))}° ${pad((Math.abs(d) % 1) * 60)}′`;
+      if (dec) dec.textContent = `${d < 0 ? "−" : "+"}${pad(Math.abs(d))}° ${pad((Math.abs(d) % 1) * 60)}'`;
     };
     const enter = () => el.classList.add("aim");
     const leave = () => el.classList.remove("aim");
@@ -297,7 +297,7 @@ export default function Landing() {
                   <span className="readout">
                     RA <span className="ra">12h 00m</span>
                     <br />
-                    DEC <span className="dec">+00° 00′</span>
+                    DEC <span className="dec">+00° 00'</span>
                   </span>
                 </div>
               </div>
@@ -333,6 +333,13 @@ export default function Landing() {
           <a href={"/map/?repo=" + encodeURIComponent(LIVE)}>Live map</a>
           <a href="#embed">Embed</a>
         </div>
+        <p className="credit">
+          Type: PP Neue Machina, PP Neue Montreal and PP Supply Mono by{" "}
+          <a href="https://pangrampangram.com" target="_blank" rel="noreferrer">
+            Pangram Pangram
+          </a>
+          , used under their personal-use licence.
+        </p>
       </footer>
 
       {leaving && (

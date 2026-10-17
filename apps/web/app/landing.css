@@ -10,13 +10,13 @@
 }
 
 .landing {
-  --display: var(--font-mona), var(--font-geist), system-ui, sans-serif;
-  --sans: var(--font-geist), -apple-system, system-ui, sans-serif;
-  --mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --display: var(--font-machina), var(--font-montreal), system-ui, sans-serif;
+  --sans: var(--font-montreal), -apple-system, system-ui, sans-serif;
+  --mono: var(--font-supply), ui-monospace, "SF Mono", Menlo, monospace;
   --bg: #02030a;
   --text: #eef2fb;
-  --text-2: rgba(222, 230, 250, 0.64);
-  --text-3: rgba(222, 230, 250, 0.4);
+  --text-2: rgba(226, 233, 250, 0.74);
+  --text-3: rgba(214, 223, 246, 0.6);
   --accent: #4d7dff;
   --accent-2: #9dbaff;
   --ice: #cfe0ff;
@@ -31,7 +31,7 @@
   color: var(--text);
   font-family: var(--sans);
   font-weight: 400;
-  letter-spacing: -0.005em;
+  letter-spacing: 0.005em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* clip (not hidden): keeps the wide hills from scrolling sideways without
@@ -106,7 +106,7 @@ html:has(.landing) {
   align-items: center;
   gap: 9px;
   font-family: var(--sans);
-  font-weight: 550;
+  font-weight: 500;
   font-size: 14.5px;
   letter-spacing: -0.01em;
   border: 0;
@@ -216,8 +216,7 @@ html:has(.landing) {
   align-items: center;
   gap: 10px;
   font-family: var(--display);
-  font-variation-settings: "wdth" 120;
-  font-weight: 650;
+  font-weight: 400;
   font-size: 15px;
   letter-spacing: -0.02em;
 }
@@ -373,11 +372,10 @@ html:has(.landing) {
 .landing h1 {
   margin: 28px 0 26px;
   font-family: var(--display);
-  font-variation-settings: "wdth" 125;
-  font-weight: 650;
+  font-weight: 400;
   font-size: clamp(40px, 7vw, 104px);
   line-height: 0.94;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.025em;
 }
 .landing h1 .w {
   display: inline-block;
@@ -463,7 +461,7 @@ html:has(.landing) {
   padding: 10px 6px 10px 1px;
 }
 .landing .field input::placeholder {
-  color: #59627e;
+  color: #8a93ad;
 }
 .landing .field input:focus-visible {
   outline: none;
@@ -582,7 +580,7 @@ html:has(.landing) {
   align-items: center;
   gap: 7px;
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   color: var(--accent-2);
   padding: 6px 10px;
   border-radius: 999px;
@@ -779,12 +777,11 @@ html:has(.landing) {
 }
 .landing .lg-head h2 {
   font-family: var(--display);
-  font-variation-settings: "wdth" 118;
-  font-weight: 600;
+  font-weight: 400;
   font-size: clamp(32px, 4.6vw, 64px);
   line-height: 1.02;
   margin-top: 18px;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 .landing .lg-head p {
@@ -1002,9 +999,8 @@ html:has(.landing) {
   gap: 0.12em 0.3em;
   flex-wrap: wrap;
   font-family: var(--display);
-  font-variation-settings: "wdth" 115;
   font-size: clamp(24px, 3vw, 38px);
-  font-weight: 600;
+  font-weight: 400;
   letter-spacing: -0.03em;
   line-height: 1.08;
 }
@@ -1094,11 +1090,10 @@ html:has(.landing) {
 .landing .closer h2 {
   margin-top: 18px;
   font-family: var(--display);
-  font-variation-settings: "wdth" 118;
-  font-weight: 600;
+  font-weight: 400;
   font-size: clamp(32px, 4.6vw, 64px);
   line-height: 1.02;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.025em;
   text-wrap: balance;
 }
 .landing .embed .sec-head p {
@@ -1262,9 +1257,9 @@ html:has(.landing) {
 }
 .landing .notes {
   margin-top: 16px;
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.6;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 /* README frame: dark, the way most people see GitHub at night */
@@ -1304,8 +1299,7 @@ html:has(.landing) {
   margin-bottom: 18px;
   border-bottom: 1px solid var(--hair);
   font-family: var(--display);
-  font-variation-settings: "wdth" 110;
-  font-weight: 600;
+  font-weight: 400;
   font-size: clamp(20px, 1.8vw, 26px);
   letter-spacing: -0.02em;
 }
@@ -1412,6 +1406,17 @@ html:has(.landing) {
 }
 .landing footer .brand {
   font-size: 14px;
+}
+.landing footer .credit {
+  flex-basis: 100%;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.landing footer .credit a {
+  color: var(--text-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--hair-2);
 }
 .landing footer .fmeta {
   display: flex;

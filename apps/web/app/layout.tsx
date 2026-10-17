@@ -1,20 +1,20 @@
 import type { Metadata } from "next";
 import {
-  Geist,
-  Geist_Mono,
   Inter,
   Instrument_Serif,
   JetBrains_Mono,
-  Mona_Sans,
 } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
 // Self-hosted at build time (no external font request) - replaces the landing's
 // Google Fonts <link>. Exposed as CSS variables the page styles consume.
 // Map route: Inter (UI sans), Instrument Serif (label serif) and JetBrains Mono
 // (the cartouche instrument type - a loaded webfont so the star chart renders
-// identically on every OS). Landing: Mona Sans (variable width, set expanded
-// for display), Geist for reading and Geist Mono for labels.
+// identically on every OS). Landing: PP Neue Machina (display), PP Neue
+// Montreal (reading) and PP Supply Mono (labels) by Pangram Pangram, used under
+// their free personal-use licence and credited in the footer; self-hosted from
+// app/fonts as latin-subset woff2.
 const inter = Inter({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700", "800", "900"],
@@ -22,25 +22,31 @@ const inter = Inter({
   display: "swap",
 });
 
-const mona = Mona_Sans({
-  subsets: ["latin"],
-  weight: "variable",
-  axes: ["wdth"],
-  variable: "--font-mona",
+const machina = localFont({
+  src: [
+    { path: "./fonts/PPNeueMachina-InktrapRegular.woff2", weight: "400" },
+    { path: "./fonts/PPNeueMachina-InktrapUltrabold.woff2", weight: "800" },
+  ],
+  variable: "--font-machina",
   display: "swap",
 });
 
-const geist = Geist({
-  subsets: ["latin"],
-  weight: "variable",
-  variable: "--font-geist",
+const montreal = localFont({
+  src: [
+    { path: "./fonts/neuemontreal-light.woff2", weight: "300" },
+    { path: "./fonts/neuemontreal-regular.woff2", weight: "400" },
+    { path: "./fonts/neuemontreal-medium.woff2", weight: "500" },
+  ],
+  variable: "--font-montreal",
   display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-geist-mono",
+const supply = localFont({
+  src: [
+    { path: "./fonts/Supply-Regular.woff2", weight: "400" },
+    { path: "./fonts/Supply-Medium.woff2", weight: "500" },
+  ],
+  variable: "--font-supply",
   display: "swap",
 });
 
@@ -79,7 +85,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${mona.variable} ${geist.variable} ${geistMono.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+      className={`${inter.variable} ${machina.variable} ${montreal.variable} ${supply.variable} ${instrumentSerif.variable} ${jetbrainsMono.variable}`}
     >
       <body>{children}</body>
     </html>

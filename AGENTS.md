@@ -26,7 +26,8 @@ black-body stars, rare spiked stars, meteors), floating star-map window with an 
 reticle, layered horizon from two alpha-cutout webps (`horizon-far.webp` behind,
 `horizon-near.webp` occluding the lower edge). Flow: hero -> legend (pinned scrub) -> README
 embed (`components/landing/Embed.tsx`, real badge preview + copy snippet) -> closing field.
-Type: Mona Sans (wide, display), Geist (body), Geist Mono (labels). Key files:
+Type: PP Neue Machina (display), PP Neue Montreal (body), PP Supply Mono (labels), self-hosted
+from `app/fonts` (personal-use licence, credited in the footer). Key files:
 `components/Landing.tsx`, `app/landing.css`, `components/Legend.tsx`,
 `components/landing/RepoForm.tsx`, `lib/site.ts` (public URLs/examples), `lib/anim.ts` (lazy
 Lenis+GSAP+ScrollTrigger loader, one shared ticker), `components/MapPreview.tsx`,
