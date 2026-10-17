@@ -21,10 +21,11 @@ import (
 func getenv(k string) string { return os.Getenv(k) }
 
 type server struct {
-	gh    *ghClient  // residual REST: merged PRs only
-	git   *gitSource // the history itself
-	cache Cache
-	lease *redisCache // cross-instance build coordination on Vercel
+	gh     *ghClient  // residual REST: merged PRs only
+	git    *gitSource // the history itself
+	cache  Cache
+	lease  *redisCache // cross-instance build coordination on Vercel
+	limits limits      // per-visitor request and cold-build budgets
 }
 
 var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -77,7 +78,7 @@ func main() {
 	cache := configuredCache(dbPath)
 	tokens := newTokenPool()
 	git := newGitSource(tokens)
-	s := &server{gh: newGHClient(tokens), git: git, cache: bestEffort{inner: cache}}
+	s := &server{gh: newGHClient(tokens), git: git, cache: bestEffort{inner: cache}, limits: configuredLimits(cache)}
 	if shared, ok := cache.(*redisCache); ok {
 		s.lease = shared
 	}
@@ -116,8 +117,8 @@ func main() {
 		mux.HandleFunc("/api/badge", unavailable)
 		mux.HandleFunc("/api/badge.gif", unavailable)
 	} else {
-		mux.HandleFunc("/api/starmap", s.handleStarmap)
-		mux.HandleFunc("/api/starmap/stream", s.handleStarmapStream)
+		mux.HandleFunc("/api/starmap", s.rateLimited(s.handleStarmap, false))
+		mux.HandleFunc("/api/starmap/stream", s.rateLimited(s.handleStarmapStream, true))
 		mux.HandleFunc("/api/badge", s.handleBadge)
 		mux.HandleFunc("/api/badge.gif", s.handleBadgeGIF)
 	}
@@ -212,6 +213,7 @@ func (s *server) build(ctx context.Context, repo string) ([]byte, error) {
 // must be safe to call concurrently - the streaming handler serialises it
 // behind a mutex.
 func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn) ([]byte, error) {
+	repo = canonicalRepo(repo)
 	// One `git ls-remote --symref` answers both "what is the default branch"
 	// and "what is HEAD". It runs over the git transport, so unlike the REST
 	// call it replaces it costs no token quota - which matters because this
@@ -279,6 +281,11 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 			emit(progressEvent{Phase: "map", Status: "skip"})
 			return blob, nil
 		}
+	}
+	// Only a build that is really about to clone spends the visitor's
+	// cold-build budget; hits and waits on another instance's build do not.
+	if err := s.allowBuild(ctx); err != nil {
+		return nil, err
 	}
 	log.Printf("cache MISS %s (building from git)", key)
 	// The commit total now comes from the clone rather than from a REST header,
@@ -479,6 +486,9 @@ func writeErr(w http.ResponseWriter, e *apiError) {
 	if e.status == http.StatusServiceUnavailable {
 		w.Header().Set("Retry-After", "20")
 	}
+	if e.retryAfter > 0 {
+		w.Header().Set("Retry-After", retrySeconds(e.retryAfter))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(e.status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": e.code, "message": e.msg})
@@ -500,7 +510,8 @@ func NewGalaxyGIFHandler(build func(context.Context, string) ([]byte, error)) ht
 			writeErr(w, &apiError{status: 400, code: "bad_repo", msg: "repo must be owner/name"})
 			return
 		}
-		blob, err := build(r.Context(), repos[0])
+		repo := canonicalRepo(repos[0])
+		blob, err := build(r.Context(), repo)
 		if err != nil {
 			var ae *apiError
 			if errors.As(err, &ae) {
@@ -511,7 +522,7 @@ func NewGalaxyGIFHandler(build func(context.Context, string) ([]byte, error)) ht
 			return
 		}
 		var contract Contract
-		if json.Unmarshal(blob, &contract) != nil || contract.Repo != repos[0] {
+		if json.Unmarshal(blob, &contract) != nil || contract.Repo != repo {
 			writeErr(w, &apiError{status: 502, code: "bad_contract", msg: "invalid cached contract"})
 			return
 		}

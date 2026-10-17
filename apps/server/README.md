@@ -100,7 +100,11 @@ queue/worker upgrade path.
 | `CLONE_CONCURRENCY`, `CLONE_QUEUE_MAX`, `CLONE_QUEUE_TIMEOUT` | 4, 32, 20s | Admission control |
 | `CLONE_TIMEOUT`, `CLONE_PROBE_TIMEOUT` | 10m, 3m | Time budgets |
 | `CLONE_MAX_MB`, `CLONE_DISK_MB` | 4096, 20480 | Scratch budget |
-| `HEAD_PROBE_TTL`, `PROBE_CONCURRENCY` | 30s, 16 | Probe reuse and limits |
+| `HEAD_PROBE_TTL`, `PROBE_CONCURRENCY` | 30s, 16 | Probe reuse and limits (a not-found probe is reused for 60s) |
+| `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW` | 60, 1m | Per-visitor API request budget (`429 too_many_requests`) |
+| `RATE_LIMIT_BUILDS`, `RATE_LIMIT_BUILD_WINDOW` | 10, 10m | Per-visitor budget for cache misses that actually clone |
+| `RATE_LIMIT_DISABLED` | unset | `true` disables both budgets |
+| `TRUST_PROXY_HEADERS` | unset | `true` when a reverse proxy appends the client to `X-Forwarded-For` (Docker only) |
 
 Errors are returned as typed JSON for normal HTTP requests. Once an NDJSON
 stream starts, failures arrive as a terminal `error` frame; consumers must

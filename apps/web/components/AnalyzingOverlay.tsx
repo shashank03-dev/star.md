@@ -234,6 +234,12 @@ function humanError(e: { code: string; message: string }): string {
       return "This repository has no commits yet — nothing to chart.";
     case "rate_limited":
       return "GitHub's rate limit was reached. Try again in a little while.";
+    case "too_many_requests":
+      return "You're charting faster than the observatory allows. Wait a minute, then try again.";
+    case "repo_too_large":
+      return "This repository's history is too large to chart right now.";
+    case "busy":
+      return "Every telescope is busy right now. Try again in a few seconds.";
     case "bad_repo":
       return "That doesn't look like a repository. Use owner/name or a github.com URL.";
     default:

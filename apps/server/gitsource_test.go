@@ -706,3 +706,18 @@ func TestBuildSnapshotMemoizesRepoTooLarge(t *testing.T) {
 		t.Fatalf("git invoked %d times for an oversized repo, want 1 (later visits served from the memo)", n)
 	}
 }
+
+// A missing repo is probed once per notFoundTTL, not on every request: typo'd
+// and crawled names otherwise turn straight into GitHub traffic.
+func TestRemoteHeadMemoizesNotFound(t *testing.T) {
+	logPath := fakeGit(t, "lsremote-private") // anonymous: "Repository not found"
+	g := &gitSource{home: t.TempDir(), probe: time.Minute, headTTL: 30 * time.Second, tokens: &tokenPool{}}
+	for i := 0; i < 3; i++ {
+		if _, _, err := g.remoteHead(context.Background(), "acme/missing"); !errors.Is(err, errNotFound) {
+			t.Fatalf("attempt %d: err = %v, want not_found", i, err)
+		}
+	}
+	if n := countCalls(readCallLog(t, logPath)); n != 1 {
+		t.Fatalf("git probed a missing repo %d times, want 1", n)
+	}
+}

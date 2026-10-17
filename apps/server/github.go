@@ -28,9 +28,10 @@ import (
 // ---- typed errors so the HTTP layer can map to status codes ----
 
 type apiError struct {
-	status int    // HTTP status to return to our client
-	code   string // machine code in the JSON body
-	msg    string
+	status     int    // HTTP status to return to our client
+	code       string // machine code in the JSON body
+	msg        string
+	retryAfter time.Duration // Retry-After hint for 429s; 0 means none
 }
 
 func (e *apiError) Error() string { return e.msg }

@@ -61,7 +61,8 @@ func NewBadgeHandler(build func(context.Context, string) ([]byte, error)) http.H
 			writeErr(w, &apiError{status: http.StatusInternalServerError, code: "internal", msg: "badge source unavailable"})
 			return
 		}
-		blob, err := build(r.Context(), repos[0])
+		repo := canonicalRepo(repos[0])
+		blob, err := build(r.Context(), repo)
 		if err != nil {
 			var ae *apiError
 			if errors.As(err, &ae) {
@@ -76,7 +77,7 @@ func NewBadgeHandler(build func(context.Context, string) ([]byte, error)) http.H
 			writeErr(w, &apiError{status: http.StatusBadGateway, code: "bad_contract", msg: "invalid cached contract"})
 			return
 		}
-		svg, err := RenderBadgeSVG(repos[0], c, size)
+		svg, err := RenderBadgeSVG(repo, c, size)
 		if err != nil {
 			writeErr(w, &apiError{status: http.StatusUnprocessableEntity, code: "bad_contract", msg: "invalid star map contract"})
 			return
