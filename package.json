@@ -1,0 +1,12 @@
+{
+  "name": "stellar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paste a GitHub repo, get an animated 3D star map of its history.",
+  "packageManager": "pnpm@11.18.0",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "start:server": "cd apps/server && GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token)} STATIC_DIR=../web/out go run ."
+  }
+}

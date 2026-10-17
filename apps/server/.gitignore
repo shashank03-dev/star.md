@@ -1,0 +1,6 @@
+/stellar-cache.db
+/stellar-cache.db-*
+/stellar-server
+*.db
+*.db-shm
+*.db-wal

@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# next.js
+apps/web/.next/
+apps/web/out/
+apps/web/next-env.d.ts
+*.tsbuildinfo
+
+# go build output
+/stellar
+/apps/server/stellar-server
+
+# sqlite cache
+*.db
+*.db-shm
+*.db-wal
+
+# env
+.env
+.env.local
+
+# os / editor
+.DS_Store
+*.log

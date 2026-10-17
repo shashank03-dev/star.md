@@ -1,0 +1,282 @@
+/* Star-map styling, ported verbatim from the locked starmap-3d.html <style>.
+   Loaded only on the /map route (Next code-splits CSS per route), so the
+   full-viewport html/body rules and generic class names do not leak to the
+   landing page. The renderer creates .lbl / .cnr elements dynamically and
+   depends on these exact class names - do not hash or rename them. */
+.starmap-root {
+  /* ── Unified type system (shared with the analyzing overlay) ──
+     Fonts come from next/font (app/layout.tsx) so the star chart renders the
+     same on every OS. The serif matches the landing (Instrument Serif); the
+     mono is now a loaded webfont instead of the OS default. One ink ramp, one
+     tracking rhythm and one type scale drive every label so the chrome reads as
+     a single designed instrument rather than ad-hoc sizes. */
+  --serif: var(--font-instrument-serif), "Iowan Old Style", Georgia, serif;
+  --mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* ink ramp — cool star-chart greys, lifted for legibility over the bloom */
+  --ink-1: #e8eefb; /* primary: star names, display glyphs */
+  --ink-2: #b7c6dd; /* secondary: HUD values, bayer letters, plate title */
+  --ink-3: #8598b2; /* tertiary: category sublabels, overlay subline */
+  --ink-4: #6d809c; /* faint chrome: hint, plate meta (was ~#46586e) */
+  --ink-5: #4c5e76; /* dimmest: pending / inactive rows */
+  --amber: #f0c079; /* single UI accent, matched to the landing --amber */
+  --amber-soft: #fff3de; /* the genesis star's own warm (locked metaphor) */
+  --amber-dim: #9c8b6e; /* genesis category sublabel */
+  --hair: rgba(96, 124, 158, 0.22);
+
+  /* type scale */
+  --fs-display: 24px; /* loading / analyzing lead line */
+  --fs-genesis: 20px;
+  --fs-name: 16px;
+  --fs-title: 15px; /* plate title */
+  --fs-bayer: 12.5px;
+  --fs-label: 10.5px; /* HUD, repo designation, task rows */
+  --fs-micro: 9.5px; /* plate meta, hint, category sublabels */
+
+  /* tracking — one uppercase-label rhythm */
+  --tr-micro: 0.22em;
+  --tr-label: 0.18em;
+  --tr-wide: 0.28em;
+
+  /* mono figures line up in columns (telemetry counts, HUD readout) */
+  font-feature-settings: "tnum" 1;
+}
+html:has(.starmap-root),
+body:has(.starmap-root) {
+  height: 100%;
+  background: #03050a;
+  overflow: hidden;
+}
+#wrap {
+  position: fixed;
+  inset: 0;
+}
+canvas.three {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+#labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: hidden;
+}
+
+.lbl {
+  position: absolute;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  text-shadow: 0 0 14px rgba(0, 0, 0, 0.95), 0 0 4px rgba(0, 0, 0, 0.9);
+}
+.lbl.name {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: var(--fs-name);
+  letter-spacing: 0.01em;
+  color: var(--ink-1);
+}
+.lbl.name .cat {
+  display: block;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-wide);
+  color: var(--ink-3);
+  margin-top: 4px;
+  text-transform: uppercase;
+}
+.lbl.genesis {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: var(--fs-genesis);
+  letter-spacing: 0.02em;
+  color: var(--amber-soft);
+}
+.lbl.genesis .cat {
+  display: block;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-wide);
+  color: var(--amber-dim);
+  margin-top: 5px;
+  text-transform: uppercase;
+}
+.lbl.bayer {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: var(--fs-bayer);
+  color: var(--ink-2);
+}
+
+/* static screen-space cartouche - keeps the chart feel without fighting the 3D camera */
+#frame {
+  position: absolute;
+  inset: 22px;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid rgba(96, 124, 158, 0.22);
+}
+#frame:before,
+#frame:after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid rgba(96, 124, 158, 0.1);
+}
+.cnr {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 0 solid rgba(150, 180, 215, 0.55);
+  z-index: 3;
+  pointer-events: none;
+}
+
+#hud {
+  position: absolute;
+  z-index: 5;
+  left: 40px;
+  bottom: 38px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+#hud button {
+  pointer-events: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--tr-label);
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: rgba(140, 165, 195, 0.07);
+  border: 1px solid rgba(140, 165, 195, 0.26);
+  padding: 8px 15px;
+  cursor: pointer;
+}
+#hud button:hover {
+  background: rgba(140, 165, 195, 0.16);
+}
+#scrub {
+  pointer-events: auto;
+  width: 220px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1px;
+  background: rgba(140, 165, 195, 0.28);
+  outline: none;
+  cursor: pointer;
+}
+#scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #dce7f7;
+}
+#scrub::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: none;
+  border-radius: 50%;
+  background: #dce7f7;
+}
+#readout {
+  min-width: 150px;
+  color: var(--ink-2);
+}
+
+#plate {
+  position: absolute;
+  z-index: 5;
+  top: 40px;
+  right: 44px;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-micro);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  line-height: 1.9;
+}
+#plate b {
+  display: block;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: var(--fs-title);
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+  text-transform: none;
+  margin-bottom: 4px;
+}
+#hint {
+  position: absolute;
+  z-index: 5;
+  left: 40px;
+  top: 40px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--tr-micro);
+  text-transform: uppercase;
+  color: var(--ink-4);
+  line-height: 2;
+}
+
+/* loading / error overlays - styled to match the cartouche language */
+#overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: #03050a;
+  transition: opacity 0.6s ease;
+}
+#overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+#overlay .glyph {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: var(--fs-display);
+  letter-spacing: 0.02em;
+  color: var(--ink-1);
+}
+#overlay .sub {
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  letter-spacing: var(--tr-wide);
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+#overlay .spinner {
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(140, 165, 195, 0.25);
+  border-top-color: #dce7f7;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+#overlay.error .spinner {
+  display: none;
+}
+#overlay.error .glyph {
+  color: var(--amber);
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

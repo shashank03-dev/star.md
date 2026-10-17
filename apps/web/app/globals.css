@@ -1,0 +1,25 @@
+/* Minimal global reset shared by both routes. Route-specific styling lives in
+   the landing (page.module.css) and map (map/starmap.css) so generic selectors
+   never leak across pages. */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: #04050a;
+  color: #f5f7fc;
+  font-family: var(--font-inter), -apple-system, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

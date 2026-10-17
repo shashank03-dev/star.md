@@ -1,0 +1,20 @@
+services:
+  stellar:
+    build: .
+    image: stellar
+    ports:
+      - "8770:8770"
+    environment:
+      # Optional: only for private repos and the merged-PR fallback; public
+      # repos chart anonymously over the git transport (no REST quota).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      # Best-effort caches, persisted across restarts: the contract SQLite
+      # cache and the bare-mirror pool used by the git history reader.
+      - stellar-cache:/data
+      - stellar-mirrors:/mirrors
+    restart: unless-stopped
+
+volumes:
+  stellar-cache:
+  stellar-mirrors:

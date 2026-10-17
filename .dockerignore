@@ -1,0 +1,12 @@
+**/node_modules
+apps/web/.next
+apps/web/out
+.git
+**/*.db
+**/*.db-shm
+**/*.db-wal
+.env*
+/stellar
+apps/server/stellar-server
+*.md
+!README.md

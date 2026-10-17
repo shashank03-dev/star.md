@@ -1,0 +1,9 @@
+packages:
+  - apps/web
+  - packages/*
+allowBuilds:
+  # sharp is only used by Next's image optimizer, which we disable for static
+  # export (images.unoptimized). No native build needed.
+  sharp: false
+minimumReleaseAgeExclude:
+  - '@types/three@0.185.3'
