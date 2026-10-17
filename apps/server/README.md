@@ -32,13 +32,14 @@ Requires `git` on PATH (the runtime image installs it).
 ## Run
 
 ```bash
-# from the repo root (serves ./ as the static dir)
-go -C apps/server run .
-# or build once:
-go -C apps/server build -o stellar-server . && STATIC_DIR=. ./apps/server/stellar-server
+# from the repo root, after `pnpm build` created apps/web/out
+pnpm start:server
+# or run the Go process directly:
+cd apps/server
+STATIC_DIR=../web/out go run .
 ```
 
-Then open http://localhost:8770/ or http://localhost:8770/map?repo=owner/name
+Then open http://localhost:8770/ or http://localhost:8770/map/?repo=owner/name.
 
 Auth is optional: public repos clone anonymously, even when a token is set
 (network commands start anonymous and only retry with credentials when a repo

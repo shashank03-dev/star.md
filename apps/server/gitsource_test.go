@@ -92,6 +92,23 @@ func fakeGit(t *testing.T, behavior string) (logPath string) {
     exit 0
     ;;
 `
+	case "log-partial-failure":
+		body = `  log)
+    printf 'aaaa\t\t1700000000\tfirst\n'
+    echo 'fatal: corrupt object' >&2
+    exit 128
+    ;;
+`
+	case "clone-big-fast":
+		body = `  clone)
+    last=""
+    for a in "$@"; do last="$a"; done
+    mkdir -p "$last"
+    printf 'ref: refs/heads/main\n' > "$last/HEAD"
+    dd if=/dev/zero of="$last/pack" bs=1024 count=8 2>/dev/null
+    exit 0
+    ;;
+`
 	case "lsremote-429-badtoken":
 		// Anonymous IP rate limit; the credential itself is broken, so the
 		// reported error must stay the rate limit, not become a 404.
@@ -360,6 +377,39 @@ func TestEnsureMirrorCloneRetryClearsTmp(t *testing.T) {
 	}
 	if n := countCalls(readCallLog(t, logPath)); n != 2 {
 		t.Errorf("git invoked %d times, want 2 (anon clone then authed clone)", n)
+	}
+}
+
+// The five-second poll can miss a fast clone that already exceeded its cap.
+// A completed clone must be checked before its temp directory is installed.
+func TestEnsureMirrorRejectsFastOversizedClone(t *testing.T) {
+	fakeGit(t, "clone-big-fast")
+	base := t.TempDir()
+	g := &gitSource{dir: base, home: t.TempDir(), maxBytes: 1024, tokens: &tokenPool{}}
+	dir := filepath.Join(base, "oversized.git")
+	if err := g.ensureMirror(context.Background(), "a/b", dir); !errors.Is(err, errRepoTooLarge) {
+		t.Fatalf("ensureMirror err = %v, want repo_too_large", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("oversized clone was installed: %v", err)
+	}
+	entries, _ := os.ReadDir(base)
+	if len(entries) != 0 {
+		t.Errorf("oversized clone left temp directories: %v", entries)
+	}
+}
+
+// A git log that emits some commits and then fails must never create a
+// partial-but-successful contract that is subsequently cached for 24 hours.
+func TestHistoryRejectsPartialGitLogFailure(t *testing.T) {
+	fakeGit(t, "log-partial-failure")
+	g := &gitSource{home: t.TempDir()}
+	commits, _, err := g.history(context.Background(), t.TempDir(), "aaaa", 2, nil)
+	if err == nil {
+		t.Fatalf("history returned %d commits despite git log exiting 128", len(commits))
+	}
+	if commits != nil {
+		t.Fatalf("history returned partial commits on error: %v", commits)
 	}
 }
 

@@ -7,6 +7,6 @@
   "scripts": {
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
-    "start:server": "cd apps/server && GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token)} STATIC_DIR=../web/out go run ."
+    "start:server": "cd apps/server && STATIC_DIR=../web/out go run ."
   }
 }

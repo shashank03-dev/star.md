@@ -14,7 +14,7 @@ sindresorhus/slugify, vercel/next.js), then two independent passes:
    Google SRE), with runtime verification of the tricky Go semantics.
 
 Every claim below has a test, a recorded run, or a cited source behind it.
-All changes are in the working tree (uncommitted; nothing pushed).
+The Part 1 fixes were committed as `33ab77e`; this review was committed as `e93dea8`. The Part 2 recommendations remain unimplemented pending backend architecture decisions (see `BACKEND-VALIDATION-2026-10-17.md`).
 
 ---
 

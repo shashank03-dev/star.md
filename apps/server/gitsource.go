@@ -422,7 +422,7 @@ var (
 // commit a tag points at, and the newest PR merges. The full log is never held
 // in memory - a 1.4M-commit repo streams through in constant space.
 func (g *gitSource) history(ctx context.Context, dir, headSHA string, total int,
-	tagSHA map[string]string) ([]commitRec, []prMerge, error) {
+	tagSHA map[string]string) (commits []commitRec, prs []prMerge, err error) {
 
 	keep := make(map[int]bool, maxStars)
 	for _, p := range evenIndices(total, maxStars) {
@@ -435,14 +435,17 @@ func (g *gitSource) history(ctx context.Context, dir, headSHA string, total int,
 	}
 	defer func() {
 		_ = stdout.Close()
-		_ = cmd.Wait()
+		// A process can produce valid-looking partial output before exiting
+		// nonzero (corrupt history, failed lazy fetch, etc.). Never cache a
+		// truncated history as a successful contract.
+		if waitErr := cmd.Wait(); waitErr != nil && err == nil {
+			commits, prs, err = nil, nil, gitError(ctx, waitErr, "")
+		}
 	}()
 
 	var (
-		commits []commitRec
-		prs     []prMerge
-		last    commitRec
-		i       int
+		last commitRec
+		i    int
 	)
 	r := bufio.NewReaderSize(stdout, 64<<10)
 	for {
@@ -755,6 +758,12 @@ func (g *gitSource) runCapped(ctx context.Context, authed bool, dir, watch strin
 
 	out, err := g.runEnv(cctx, authed, dir, args...)
 	close(done)
+	// The polling goroutine prevents sustained growth past the limit, but a
+	// fast clone can finish between ticks. Check once more before installing
+	// its temporary directory as a usable mirror.
+	if dirSize(watch) > g.maxBytes {
+		return nil, errRepoTooLarge
+	}
 	if err != nil {
 		select {
 		case <-over:
