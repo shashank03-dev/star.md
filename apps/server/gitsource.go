@@ -153,8 +153,14 @@ func (g *gitSource) rememberTooLarge(repo string) {
 
 type headMemo struct {
 	sha, branch string
+	err         error // errNotFound memoized for notFoundTTL
 	expires     time.Time
 }
+
+// notFoundTTL keeps a missing repo from being re-probed on every request
+// (typos, crawlers, deleted repos) while still noticing within a minute when a
+// repo is created or made public.
+const notFoundTTL = time.Minute
 
 func newGitSource(tokens *tokenPool) *gitSource {
 	// Vercel Functions have an ephemeral 500 MB /tmp budget. Keep mirror
@@ -206,6 +212,9 @@ func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defau
 		entry, ok := g.headCache[repo]
 		g.headMu.Unlock()
 		if ok && time.Now().Before(entry.expires) {
+			if entry.err != nil {
+				return "", "", entry.err
+			}
 			return entry.sha, entry.branch, nil
 		}
 	}
@@ -225,7 +234,11 @@ func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defau
 			}
 		}
 		sha, branch, probeErr := g.probeRemoteHead(workCtx, repo)
-		if probeErr == nil && g.headTTL > 0 {
+		memo := headMemo{sha: sha, branch: branch, expires: time.Now().Add(g.headTTL)}
+		if errors.Is(probeErr, errNotFound) {
+			memo = headMemo{err: errNotFound, expires: time.Now().Add(notFoundTTL)}
+		}
+		if g.headTTL > 0 && (probeErr == nil || memo.err != nil) {
 			g.headMu.Lock()
 			// Avoid unbounded memory when attackers send thousands of valid names.
 			if len(g.headCache) >= 2048 {
@@ -234,7 +247,7 @@ func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defau
 			if g.headCache == nil {
 				g.headCache = make(map[string]headMemo)
 			}
-			g.headCache[repo] = headMemo{sha, branch, time.Now().Add(g.headTTL)}
+			g.headCache[repo] = memo
 			g.headMu.Unlock()
 		}
 		return headMemo{sha: sha, branch: branch}, probeErr

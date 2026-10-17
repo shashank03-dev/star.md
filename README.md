@@ -115,7 +115,7 @@ curl -o /tmp/stellar.gif 'http://localhost:8770/api/badge.gif?repo=octocat/Hello
 curl -o /tmp/stellar.svg 'http://localhost:8770/api/badge?repo=octocat/Hello-World'
 ```
 
-NDJSON frames use `resolve`, `head`, `history`, and `map` progress phases, then a `result` containing the complete contract or an `error` with a typed code. After streaming begins, HTTP status remains 200 even when a later frame reports failure. Other routes return HTTP errors such as 400 invalid repo, 404 missing, 413 oversized repo, 422 empty repo, 503 busy/rate-limited, and 504 timeout.
+NDJSON frames use `resolve`, `head`, `history`, and `map` progress phases, then a `result` containing the complete contract or an `error` with a typed code. After streaming begins, HTTP status remains 200 even when a later frame reports failure. Other routes return HTTP errors such as 400 invalid repo, 404 missing, 413 oversized repo, 422 empty repo, 429 per-visitor limit (`too_many_requests`, with `Retry-After`), 503 busy/GitHub rate-limited, and 504 timeout. Repository names are case-insensitive: the API canonicalizes them to lowercase.
 
 ## Runtime settings
 
@@ -133,6 +133,10 @@ NDJSON frames use `resolve`, `head`, `history`, and `map` progress phases, then 
 | `CLONE_TIMEOUT` / `CLONE_PROBE_TIMEOUT` | 10m / 3m | 150s / 20s |
 | `CLONE_MAX_MB` / `CLONE_DISK_MB` | 4096 / 20480 | 300 / 380 |
 | `HEAD_PROBE_TTL` / `PROBE_CONCURRENCY` | 30s / 16 | 30s / 16 |
+| `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW` | 60 / 1m per visitor IP (memory) | Same, shared through Redis |
+| `RATE_LIMIT_BUILDS` / `RATE_LIMIT_BUILD_WINDOW` | 10 / 10m cold builds per visitor IP | Same, shared through Redis |
+| `RATE_LIMIT_DISABLED` | Unset | `true` turns both budgets off |
+| `TRUST_PROXY_HEADERS` | Unset (socket address) | Ignored: Vercel's `x-real-ip` is used |
 | `CLONE_DIR` / `CLONE_TTL` | OS temp / 168h | Ephemeral mirrors |
 | `NEXT_PUBLIC_API_BASE` | Unset | Website's HTTPS API origin, baked into build |
 

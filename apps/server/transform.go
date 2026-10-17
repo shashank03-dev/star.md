@@ -7,10 +7,11 @@ import (
 )
 
 // paramsVersion invalidates cached blobs whenever the emitted contract shape
-// changes. Bump the v2 prefix by hand on any transform change; the suffix
+// changes. Bump the v3 prefix by hand on any transform change; the suffix
 // tracks the sampling knobs automatically, so moving one of them can never
-// silently serve contracts the old knobs shaped.
-var paramsVersion = fmt.Sprintf("v2-s%d-b%d", maxStars, branchCap)
+// silently serve contracts the old knobs shaped. v3: the contract's repo (and
+// so the layout seed) is the lowercase canonical name.
+var paramsVersion = fmt.Sprintf("v3-s%d-b%d", maxStars, branchCap)
 
 // Star-count ceiling for the current one-sprite-per-star renderer. Kept below
 // the fps cliff for that architecture; measured empirically in-browser.
