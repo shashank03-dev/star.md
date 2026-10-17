@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -18,9 +24,35 @@ type server struct {
 	gh    *ghClient  // residual REST: merged PRs only
 	git   *gitSource // the history itself
 	cache Cache
+	lease *redisCache // cross-instance build coordination on Vercel
 }
 
 var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+func configuredCache(dbPath string) Cache {
+	var cache Cache
+	url, token := getenv("UPSTASH_REDIS_REST_URL"), getenv("UPSTASH_REDIS_REST_TOKEN")
+	if getenv("VERCEL") != "" && (url == "" || token == "") {
+		// Vercel has ephemeral storage. A local SQLite cache here would make
+		// cold requests build independently on every Function instance.
+		log.Print("cache: Vercel requires both Upstash Redis REST variables")
+		return nil
+	}
+	if url != "" || token != "" {
+		if c, err := newRedisCache(url, token); err != nil {
+			log.Printf("cache: redis configuration invalid: %v", err)
+		} else {
+			cache = c
+		}
+	} else {
+		if c, err := newSQLiteCache(dbPath); err != nil {
+			log.Printf("cache: init failed (%v) - running without cache", err)
+		} else {
+			cache = c
+		}
+	}
+	return cache
+}
 
 func main() {
 	staticDir := getenv("STATIC_DIR")
@@ -36,24 +68,56 @@ func main() {
 		dbPath = "stellar-cache.db"
 	}
 
-	var cache Cache
-	if c, err := newSQLiteCache(dbPath); err != nil {
-		log.Printf("cache: init failed (%v) - running without cache", err)
-	} else {
-		cache = c
-	}
+	cache := configuredCache(dbPath)
 	tokens := newTokenPool()
 	git := newGitSource(tokens)
 	s := &server{gh: newGHClient(tokens), git: git, cache: bestEffort{inner: cache}}
+	if shared, ok := cache.(*redisCache); ok {
+		s.lease = shared
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.HandleFunc("/api/starmap", s.handleStarmap)
-	mux.HandleFunc("/api/starmap/stream", s.handleStarmapStream)
-	mux.Handle("/", denyDotfiles(http.FileServer(http.Dir(staticDir))))
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := exec.LookPath("git"); err != nil || cache == nil && getenv("VERCEL") != "" {
+			http.Error(w, "backend unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	})
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"activeAnalyses":  len(git.sem),
+			"waitingAnalyses": git.waiting.Load(),
+			"maxAnalyses":     cap(git.sem),
+			"maxWaiting":      git.queueMax,
+		})
+	})
+	if getenv("VERCEL") != "" && cache == nil {
+		// A production Function without a shared cache would stampede GitHub
+		// on every visit. Fail closed until Redis is configured correctly.
+		unavailable := func(w http.ResponseWriter, _ *http.Request) {
+			writeErr(w, &apiError{status: 503, code: "cache_unavailable", msg: "shared cache is not configured"})
+		}
+		mux.HandleFunc("/api/starmap", unavailable)
+		mux.HandleFunc("/api/starmap/stream", unavailable)
+		mux.HandleFunc("/api/badge", unavailable)
+		mux.HandleFunc("/api/badge.gif", unavailable)
+	} else {
+		mux.HandleFunc("/api/starmap", s.handleStarmap)
+		mux.HandleFunc("/api/starmap/stream", s.handleStarmapStream)
+		mux.HandleFunc("/api/badge", s.handleBadge)
+		mux.HandleFunc("/api/badge.gif", s.handleBadgeGIF)
+	}
+	if getenv("VERCEL") == "" && staticDir != "-" {
+		mux.Handle("/", denyDotfiles(http.FileServer(http.Dir(staticDir))))
+	}
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -69,8 +133,23 @@ func main() {
 	}
 	log.Printf("stellar-server listening on :%s (static=%s, cache=%s, mirrors=%s, tokens=%d)",
 		port, staticDir, dbPath, git.dir, tokens.size())
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	failed := make(chan error, 1)
+	go func() { failed <- srv.ListenAndServe() }()
+	select {
+	case err := <-failed:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("http: %v", err)
+		}
+	case <-stopCtx.Done():
+		log.Print("http: draining connections")
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("http: graceful shutdown incomplete: %v", err)
+			_ = srv.Close()
+		}
 	}
 }
 
@@ -99,6 +178,9 @@ func (s *server) handleStarmap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, &apiError{status: 400, code: "bad_repo", msg: "repo must be owner/name"})
 		return
 	}
+	// A configured GitHub token may access private repositories. Do not allow
+	// a shared CDN to cache their contracts across visitors.
+	w.Header().Set("Cache-Control", "private, no-store")
 
 	blob, err := s.build(r.Context(), repo)
 	if err != nil {
@@ -145,6 +227,34 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 		emit(progressEvent{Phase: "map", Status: "skip"})
 		return blob, nil
 	}
+	buildCtx := ctx
+	if s.lease != nil {
+		release, acquired := s.lease.tryBuildLease(key)
+		if !acquired {
+			blob, err := s.waitForBuild(ctx, key)
+			if err != nil {
+				return nil, err
+			}
+			emit(progressEvent{Phase: "head", Status: "done", CommitTotal: cachedTotal(blob), HeadSha: short(headSHA), Cached: true})
+			emit(progressEvent{Phase: "history", Status: "skip"})
+			emit(progressEvent{Phase: "map", Status: "skip"})
+			return blob, nil
+		}
+		defer release()
+		// gitSource.snapshot intentionally finishes an in-flight clone after
+		// its initiating client disconnects, to share work with other callers.
+		// Keep the Redis lease until that detached work has completed and the
+		// contract has been cached; otherwise another instance can reclone it.
+		buildCtx = context.WithoutCancel(ctx)
+		// A competing instance may have finished between our first read and
+		// lease acquisition. Avoid repeating an already-completed clone.
+		if blob, ok := s.cache.Get(key); ok {
+			emit(progressEvent{Phase: "head", Status: "done", CommitTotal: cachedTotal(blob), HeadSha: short(headSHA), Cached: true})
+			emit(progressEvent{Phase: "history", Status: "skip"})
+			emit(progressEvent{Phase: "map", Status: "skip"})
+			return blob, nil
+		}
+	}
 	log.Printf("cache MISS %s (building from git)", key)
 	// The commit total now comes from the clone rather than from a REST header,
 	// so this frame carries the sha and a second head frame below fills in the
@@ -156,7 +266,7 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 	// same head share this clone instead of each starting their own.
 	emit(progressEvent{Phase: "history", Status: "start"})
 	stop := keepalive(emit)
-	snap, err := s.git.snapshot(ctx, repo, headSHA, defaultBranch)
+	snap, err := s.git.snapshot(buildCtx, repo, headSHA, defaultBranch)
 	stop()
 	if err != nil {
 		return nil, err
@@ -182,7 +292,7 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 		// The fallback is up to 9 serial REST calls; bound the whole phase so
 		// one stalled call cannot hold the build for the sum of their worst
 		// cases (CLONE_TIMEOUT does not cover it - the clone is already done).
-		pctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		pctx, cancel := context.WithTimeout(buildCtx, 60*time.Second)
 		if rest, err := s.gh.mergedPulls(pctx, repo); err == nil && len(rest) > 0 {
 			pulls = rest
 		}
@@ -212,7 +322,7 @@ func (s *server) buildWithProgress(ctx context.Context, repo string, emit emitFn
 		return nil, err
 	}
 	emit(progressEvent{Phase: "map", Status: "done", Stars: len(main), Constellations: len(branches)})
-	s.cache.Put(key, blob, 24*time.Hour)
+	s.cache.Put(key, blob, 15*time.Minute)
 	return blob, nil
 }
 
@@ -248,15 +358,26 @@ func (s *server) handleStarmapStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no") // don't let a proxy buffer the stream
 
-	flusher, _ := w.(http.Flusher)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	controller := http.NewResponseController(w)
 	enc := json.NewEncoder(w)
 	var mu sync.Mutex
 	emit := func(ev progressEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		_ = enc.Encode(ev) // Encode appends '\n' -> one NDJSON line per frame
-		if flusher != nil {
-			flusher.Flush()
+		if ctx.Err() != nil {
+			return
+		}
+		// A client that stopped reading must not hold a clone worker or a
+		// goroutine indefinitely. Each flush has an independent deadline.
+		_ = controller.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if err := enc.Encode(ev); err != nil {
+			cancel()
+			return
+		}
+		if err := controller.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			cancel()
 		}
 	}
 
@@ -266,7 +387,7 @@ func (s *server) handleStarmapStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	blob, err := s.buildWithProgress(r.Context(), repo, emit)
+	blob, err := s.buildWithProgress(ctx, repo, emit)
 	if err != nil {
 		code, msg := "internal", err.Error()
 		if ae, ok := err.(*apiError); ok {
@@ -327,7 +448,66 @@ func keepalive(emit emitFn) (stop func()) {
 }
 
 func writeErr(w http.ResponseWriter, e *apiError) {
+	if e.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "20")
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(e.status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": e.code, "message": e.msg})
+}
+
+// README embeds cannot execute Three.js. The animated GIF captures the same
+// contract's genesis-to-HEAD growth as a small, deterministic image.
+func NewGalaxyGIFHandler(build func(context.Context, string) ([]byte, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeErr(w, &apiError{status: 405, code: "method_not_allowed", msg: "GET or HEAD required"})
+			return
+		}
+		repos := r.URL.Query()["repo"]
+		if len(repos) != 1 || !badgeValidRepo(repos[0]) {
+			writeErr(w, &apiError{status: 400, code: "bad_repo", msg: "repo must be owner/name"})
+			return
+		}
+		blob, err := build(r.Context(), repos[0])
+		if err != nil {
+			var ae *apiError
+			if errors.As(err, &ae) {
+				writeErr(w, ae)
+			} else {
+				writeErr(w, &apiError{status: 500, code: "internal", msg: "badge source unavailable"})
+			}
+			return
+		}
+		var contract Contract
+		if json.Unmarshal(blob, &contract) != nil || contract.Repo != repos[0] {
+			writeErr(w, &apiError{status: 502, code: "bad_contract", msg: "invalid cached contract"})
+			return
+		}
+		data, err := renderGalaxyGIF(contract)
+		if err != nil {
+			writeErr(w, &apiError{status: 422, code: "bad_contract", msg: "invalid star map contract"})
+			return
+		}
+		sum := sha256.Sum256(data)
+		etag := fmt.Sprintf("\"%x\"", sum[:12])
+		w.Header().Set("Content-Type", "image/gif")
+		w.Header().Set("Cache-Control", "public, max-age=300, stale-while-revalidate=3600")
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(data)
+		}
+	}
+}
+
+func (s *server) handleBadgeGIF(w http.ResponseWriter, r *http.Request) {
+	NewGalaxyGIFHandler(s.build)(w, r)
 }

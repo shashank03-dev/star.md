@@ -1,92 +1,105 @@
-# Stellar backend
+# Stellar Go backend
 
-Go service that reads a real GitHub repo's history and emits the star-map
-contract rendered by the locked renderer, `apps/web/lib/starmap/renderer.ts`
-(`starmap-3d.html` was the original standalone reference). It also serves the
-static frontend, replacing `python3 -m http.server 8770`.
+This service turns GitHub repository history into the shared, versioned Stellar
+[Contract](../../packages/contract/index.ts). The interactive Three.js map and
+GitHub README SVG/GIF images consume the **same contract**; their presentation
+does not affect Git history parsing or output semantics.
 
-## Where the data comes from
+## Request flow
 
-The history is read from **git**, not from the REST API. Each build makes one
-`git ls-remote` (the HEAD sha, which is also the cache key) and, on a miss, one
-blob-less bare clone - `git clone --bare --filter=tree:0` - which is then parsed
-locally with `git log`, `for-each-ref` and `merge-base`.
+1. Validate the GitHub `owner/repo` identifier and probe its HEAD using
+   `git ls-remote` (30-second in-process memo, bounded concurrent probes).
+2. Look up `owner/repo@HEAD#paramsVersion` in the contract cache. On Vercel,
+   Upstash Redis REST shares the cache across instances; local Docker uses
+   SQLite.
+3. On a Vercel cache miss, acquire a short-lived Redis build lease so other
+   instances wait for the first completed contract. The local server also uses
+   `singleflight` and a per-repo mirror lock.
+4. Admit a bounded concurrent Git job, clone/fetch a blob-less bare mirror
+   (`git clone --bare --filter=tree:0`), parse commits/branches/tags locally,
+   and optionally enrich merged pull requests through GitHub REST.
+5. Construct a deterministic contract, write it to the cache for 15 minutes,
+   and return JSON, NDJSON progress, static SVG, or animated GIF.
 
-This matters because the git transport is a **separate budget** from the REST
-API's 5,000 requests/hour. Charting vercel/next.js (35,016 commits) costs zero
-REST calls; the REST path it replaced cost ~1,400. One token is therefore no
-longer the ceiling on how many repos this can serve.
+Public repositories work anonymously, without consuming personal GitHub REST
+quota for their commit histories. The optional GitHub token is used for
+merged-PR metadata and allowed authenticated fallbacks.
 
-REST is still used for exactly two things, neither of which git can answer:
+## Routes
 
-- merged pull requests for repos whose commit history carries no PR reference
-  (a rebase-merge workflow leaves nothing to parse) - at most 9 calls, and only
-  when a token is configured;
-- authenticating a **private** repo's clone.
+| Route | Behavior |
+| --- | --- |
+| `GET /healthz` | Process liveness |
+| `GET /readyz` | Git and required Vercel cache configuration |
+| `GET /api/status` | Per-instance active and queued jobs, no global totals |
+| `GET /api/starmap?repo=owner/name` | Contract JSON |
+| `GET /api/starmap/stream?repo=owner/name` | Flushed NDJSON with terminal result/error |
+| `GET /api/badge?repo=owner/name&size=medium` | Static self-contained SVG; sizes compact, medium, large |
+| `GET /api/badge.gif?repo=owner/name` | Looping 11-frame 720×200 GIF, genesis to HEAD |
 
-Every REST call is logged as `rest: GET ...`, so "no `rest:` lines" is the proof
-that a build stayed inside the git transport.
+Badge routes return five-minute publicly cacheable images. Do **not** enable
+private repo access on a public deployment: public URLs and GitHub image proxies
+cannot enforce repository permissions. Vercel disables private-token fallback
+unless deliberately overridden; that override requires visitor authentication
+and authorization to be designed first. Git transport arguments do not contain
+embedded tokens.
 
-Requires `git` on PATH (the runtime image installs it).
+## Local server
 
-## Run
+Prerequisites: Go 1.26.5+, Git, and optionally the prebuilt frontend in
+`apps/web/out`.
 
 ```bash
-# from the repo root, after `pnpm build` created apps/web/out
+# From the repository root
+go -C apps/server test -race -count=1 ./...
+go -C apps/server vet ./...
+go -C apps/server build ./...
+pnpm build
 pnpm start:server
-# or run the Go process directly:
-cd apps/server
-STATIC_DIR=../web/out go run .
 ```
 
-Then open http://localhost:8770/ or http://localhost:8770/map/?repo=owner/name.
+Open http://localhost:8770/map/?repo=octocat/Hello-World. Or run the single
+container with `docker compose up --build`. If using `go run .` from
+`apps/server`, set `STATIC_DIR=../web/out` for local static serving.
 
-Auth is optional: public repos clone anonymously, even when a token is set
-(network commands start anonymous and only retry with credentials when a repo
-presents as private, or when the anonymous transport is rate-limited), so a
-stale token cannot break public charting. Set `GITHUB_TOKEN` only for private
-repos or the merged-PR fallback above. Static files with dot-prefixed URL path
-segments (`.git`, `.env`) are rejected; symlinked targets are not resolved, so
-keep links to dotfiles out of `STATIC_DIR`.
+## Production (two Vercel projects)
 
-## Config (env)
+Set the API project's root directory to `apps/server`. Vercel auto-detects
+`Dockerfile.vercel`, which installs Git, builds the Go server, and listens on
+`$PORT` (8080 in the image). Set the Vercel project environment variable
+`PORT=8080`, then set `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` from the linked Upstash Marketplace Redis store.
+The service returns a typed 503 when this cache is missing in Vercel.
+Ephemeral `/tmp` mirrors are disposable; a shared SQLite file is unsuitable
+for separate Functions. The frontend Vercel project uses root `apps/web`,
+with `NEXT_PUBLIC_API_BASE` pointing to the API HTTPS origin.
 
-| var | default | meaning |
-|-----|---------|---------|
-| `PORT` | `8770` | listen port |
-| `STATIC_DIR` | `.` | folder served at `/` (run from repo root) |
-| `CACHE_DB` | `stellar-cache.db` | SQLite cache path |
-| `GITHUB_TOKEN` | (unset) | token for private repos / merged-PR fallback |
-| `GITHUB_TOKENS` | (unset) | comma-separated pool, used round-robin; wins over `GITHUB_TOKEN` |
-| `CLONE_DIR` | `$TMPDIR/stellar-repos` | where bare mirrors live |
-| `CLONE_CONCURRENCY` | `4` | clones/fetches allowed to run at once |
-| `CLONE_TIMEOUT` | `10m` | per-build ceiling (clone + parse) |
-| `CLONE_PROBE_TIMEOUT` | `3m` | ceiling for the per-request HEAD probe (`git ls-remote`) |
-| `CLONE_MAX_MB` | `4096` | per-repo disk cap; a clone past it is killed |
-| `CLONE_DISK_MB` | `20480` | total mirror-cache budget before LRU eviction |
-| `CLONE_TTL` | `168h` | drop mirrors untouched for this long |
+Default Vercel clone concurrency is 1 per instance; clone queue length is
+32, wait timeout 8s, cold build budget 150s, per-repo mirror cap 300 MiB,
+scratch mirror budget 380 MiB, and probe timeout 20s. Actual Vercel plan and
+request duration limits also apply. A 503 includes `Retry-After: 20`.
+This architecture serves bounded on-demand analyses, not unlimited demand or
+arbitrarily large repositories; see
+[the deployment plan](../../docs/VERCEL-ARCHITECTURE.md) for the durable
+queue/worker upgrade path.
 
-## Endpoints
+| Environment variable | Local default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8770` | HTTP listen port (set Vercel project to 8080) |
+| `STATIC_DIR` | `.` | Serve static frontend locally; `-` disables |
+| `CACHE_DB` | `stellar-cache.db` | Local SQLite only |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | unset | Required on Vercel |
+| `GITHUB_TOKEN`, `GITHUB_TOKENS` | unset | Optional PR metadata and retry pool |
+| `CLONE_DIR`, `CLONE_TTL` | OS temp, 168h | Mirror path and local retention |
+| `CLONE_CONCURRENCY`, `CLONE_QUEUE_MAX`, `CLONE_QUEUE_TIMEOUT` | 4, 32, 20s | Admission control |
+| `CLONE_TIMEOUT`, `CLONE_PROBE_TIMEOUT` | 10m, 3m | Time budgets |
+| `CLONE_MAX_MB`, `CLONE_DISK_MB` | 4096, 20480 | Scratch budget |
+| `HEAD_PROBE_TTL`, `PROBE_CONCURRENCY` | 30s, 16 | Probe reuse and limits |
 
-- `GET /healthz` -> `200 ok`
-- `GET /api/starmap?repo=owner/name` -> contract JSON
-  - `404 {"error":"not_found"}` unknown repo
-  - `422 {"error":"empty_repo"}` repo with no commits
-  - `503 {"error":"rate_limited"}` GitHub rate limit
-- `GET /api/starmap/stream?repo=owner/name` -> NDJSON `progress` frames, then a
-  terminal `result` (the contract) or `error`
-
-## Notes
-
-- The cache is best-effort: any cache failure is logged and swallowed, and the
-  request falls through to a fresh GitHub build. A cache problem never produces
-  an error page. Swap the `Cache` implementation in `cache.go` (2 methods) to
-  move off SQLite.
-- Cold builds are cached by `owner/repo + HEAD sha`, so a second request is
-  instant until the repo gets a new commit. A cold build is one `git ls-remote`
-  plus a blob-less bare clone parsed locally, bounded by `CLONE_TIMEOUT` and
-  `CLONE_MAX_MB`. Warm requests are ~1s.
-- The SQLite cache and the mirror directory are single-instance local state:
-  never attach them to more than one replica (SQLite WAL is not safe on network
-  filesystems). Scale by routing repos to instances, or swap the 2-method
-  `Cache` interface for a shared store first.
+Errors are returned as typed JSON for normal HTTP requests. Once an NDJSON
+stream starts, failures arrive as a terminal `error` frame; consumers must
+not infer success from HTTP 200 alone. The locked 3D renderer, transformation
+invariants, and prior hardening are described in
+[DESIGN-LOCK.md](../../DESIGN-LOCK.md),
+[AGENTS.md](../../AGENTS.md), and
+[backend design review](../../docs/BACKEND-DESIGN-REVIEW.md).

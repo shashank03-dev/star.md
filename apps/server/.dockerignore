@@ -1,0 +1,9 @@
+.git
+.gitignore
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+stellar-server
+*.log

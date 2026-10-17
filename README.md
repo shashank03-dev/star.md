@@ -1,157 +1,162 @@
-# Stellar
+# Stellar — turn GitHub history into a galaxy
 
-**Your GitHub history, mapped as a living galaxy.**
+Stellar visualizes a repository's real commit history as an animated, interactive **3D star map**. The first commit ignites at the center. Subsequent commits spread into a galactic disc; branches form constellations, merges draw connections, and releases become brighter stars.
 
-Stellar turns a repository's real commit history into an interactive, animated 3D star map. The first commit ignites at the center; subsequent commits form a growing galactic disc. Branches become constellations, pull requests connect them to the main history, and releases mark significant stars. Paste `owner/repo` or a GitHub repository URL into the app to explore it.
+Explore the galaxy in the browser or embed a **live, repository-specific galaxy image** in a GitHub README. The embed is a real animated GIF or static SVG generated from the same backend data that drives the interactive view.
 
-This repository contains the website and its Go API. Both ship together in **one Docker container**. Public repositories work without a GitHub token.
+**Status (October 2026):** The Go analyzer, 3D website, SVG/GIF endpoints, and Vercel deployment configuration are implemented and tested locally. Production deployment requires creating the Vercel projects, linking Upstash Redis, and setting the API URL. Example domains below are placeholders. **No hosted badge URL is live yet.**
 
-> **Status:** The interactive website and on-demand repository analysis are implemented. The live-updating embeddable README artifact is planned for phase 2. See [DESIGN-LOCK.md](DESIGN-LOCK.md) for the established visual behavior.
+## Embed your repository galaxy
 
-## How it works
+Once the Stellar API is deployed, add either snippet to your repository's `README.md`. Replace `YOUR-API.vercel.app` with the deployed API hostname, and `OWNER/REPO` with your GitHub repository.
 
-```text
-Browser (Next.js static export)
-    │
-    ├── /                      Landing / repository input
-    └── /map/?repo=owner/name  Interactive 3D map
-            │
-            └── GET /api/starmap/stream?repo=owner/name
-                    │
-                    ▼
-               Go service
-               ├── git ls-remote       Find default branch and HEAD
-               ├── SQLite cache        Reuse an existing contract by HEAD
-               ├── Bare partial clone   Fetch commit graph, branches, tags
-               ├── Local git parsing    Sample actual commits and PR merges
-               └── Optional GitHub REST Enrich merged PRs when needed
-                    │
-                    ▼
-          Shared repository contract
-                    │
-                    ▼
-              Three.js renderer
+**Animated galaxy (GIF; growth from genesis to HEAD):**
+
+```md
+[![My repository galaxy](https://YOUR-API.vercel.app/api/badge.gif?repo=OWNER/REPO)](https://YOUR-WEB.vercel.app/map/?repo=OWNER/REPO)
 ```
 
-The backend sends **repository facts**, not 3D coordinates. The renderer consistently places real commits using a deterministic, seeded layout. Visual decisions are locked in [DESIGN-LOCK.md](DESIGN-LOCK.md); backend changes must preserve the shape of [`packages/contract`](packages/contract/index.ts).
+**Static galaxy (SVG; compact, medium, or large):**
 
-The Git transport retrieves public history anonymously using `git clone --bare --filter=tree:0`. GitHub REST is reserved for optional merged-PR enrichment, while an access token can also unlock private repositories. When `GITHUB_TOKEN` is set, the backend may make REST requests for repositories whose history lacks recoverable PR counts.
+```md
+[![My repository galaxy](https://YOUR-API.vercel.app/api/badge?repo=OWNER/REPO&size=medium)](https://YOUR-WEB.vercel.app/map/?repo=OWNER/REPO)
+```
 
-## Quick start: Docker
+The image links to the full interactive map. GitHub README images cannot execute JavaScript or WebGL, so they **cannot embed the interactive Three.js scene**. Stellar renders the GIF and SVG on the server from your repository's commit contract; they represent the galaxy with a lightweight 2D projection suitable for GitHub's image proxy. The GIF loops through 11 growth frames (720 × 200 pixels); SVG sizes are `compact`, `medium` (default), and `large`.
 
-Install [Docker](https://docs.docker.com/get-docker/) with the Compose plugin. From the repository root:
+Images receive a 5-minute public cache lifetime. GitHub's image proxy may retain them longer; changes to tags, side branches, or the default branch typically become visible after the 15-minute contract cache expires, plus any upstream image caching. Very large, inaccessible, or rate-limited repositories can return an error rather than an image. **Use public repositories for public embeds.** On the default Vercel configuration, private repositories are not served.
 
-```bash
+## Architecture
+
+```text
+GitHub README <img> → Vercel API → /api/badge[.gif] → SVG / looping GIF
+                                                   ↑
+Browser → Vercel static Next.js /map/ → Go API → shared Contract
+                                           │
+                                           ├── git ls-remote (HEAD probe)
+                                           ├── Upstash Redis REST cache (15m)
+                                           ├── Redis build lease (cross-instance)
+                                           ├── bounded queue + per-instance clone limit
+                                           ├── blob-less bare Git clone in temporary storage
+                                           ├── git log / branches / tags / merges
+                                           └── optional GitHub REST merged-PR enrichment
+                                                                    │
+Shared Contract → deterministic Three.js galaxy renderer (browser)
+```
+
+The Go API returns facts, sampled commits, release markers, and branch summaries as a versioned [Contract](packages/contract/index.ts). It does **not** dictate 3D coordinates. The frontend uses the contract to render the locked [galaxy design](DESIGN-LOCK.md). A public repository can be analyzed anonymously over Git without using a GitHub personal access token. GitHub REST calls are optional and limited to merged-PR enrichment. The README images reuse the identical contract.
+
+## Deploy both services on Vercel
+
+This repo supports **two Vercel projects** connected to the same GitHub repository and deploying directly from `main`:
+
+| Project | Root directory | Deployment | Configuration |
+| --- | --- | --- | --- |
+| API | `apps/server` | `Dockerfile.vercel` container Function with Go + Git | Link Upstash Redis; set `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `PORT=8080` |
+| Website | `apps/web` | Next.js static export (`out`) | Set `NEXT_PUBLIC_API_BASE=https://YOUR-API.vercel.app` at build time |
+
+The API needs a container because the Git binary is required for partial cloning and parsing. Vercel Functions have **ephemeral local storage**; Redis is shared across instances. Configure the two projects and their environment variables before sending real traffic. Set the frontend root's **Include source files outside the Root Directory** option so it can access `packages/contract` and the workspace lockfile. The frontend refuses a Vercel build if the public API origin is missing or malformed.
+
+The API's `/readyz` checks the Git executable and cache configuration; `/api/status` exposes local active/waiting jobs. Clone and disk limits are enforced per Function. Heavy repositories may exceed these limits and return a typed error; protecting the service from overload is preferable to hanging all requests. Redis leases coalesce concurrent cold builds across instances, and retries after overload are supported with `Retry-After`. Production traffic testing, cost/quotas, GitHub image proxy behavior, and Vercel Observability still require a live deployment.
+
+Full deployment instructions and operational limits: [Vercel architecture](docs/VERCEL-ARCHITECTURE.md) and [frontend deployment](docs/VERCEL-FRONTEND.md).
+
+## Run locally
+
+Prerequisites: **Go 1.26.5+**, **Git**, **Node.js 24**, **pnpm 11**, or Docker and Docker Compose.
+
+The easiest local setup runs both services in one container with SQLite and persistent bare Git mirrors:
+
+```sh
 git clone https://github.com/shashank03-dev/star.md.git
 cd star.md
 docker compose up --build
 ```
 
-Open **http://localhost:8770**, or load an example map directly at **http://localhost:8770/map/?repo=octocat/Hello-World**.
+Open `http://localhost:8770` and navigate to `http://localhost:8770/map/?repo=octocat/Hello-World`.
 
-No environment variables are required for public repositories. To enable private-repository access and optional GitHub REST enrichment, set `GITHUB_TOKEN` before starting Compose:
+For local development without Docker:
 
-```bash
-export GITHUB_TOKEN="your-github-token"
-docker compose up --build
-```
-
-The Compose configuration persists SQLite contracts and Git mirrors in two Docker volumes. Stop it with `docker compose down` (this preserves the volumes; `down -v` removes them).
-
-## Local development
-
-**Prerequisites:** Node.js 24, pnpm 11, Go **1.26.5+**, and `git` on `PATH`. [Corepack](https://nodejs.org/api/corepack.html) can provision the pnpm version declared in `package.json`.
-
-```bash
+```sh
 corepack enable
 pnpm install --frozen-lockfile
-pnpm build                 # creates apps/web/out
-pnpm start:server          # serves the static app and API at localhost:8770
+pnpm build
+pnpm start:server
 ```
 
-For browser hot reload, leave the Go server running and start Next.js in another terminal:
+For frontend hot reload, run the Go API as above and, in another terminal:
 
-```bash
+```sh
 NEXT_PUBLIC_API_BASE=http://localhost:8770 pnpm dev
-# Open http://localhost:3000
 ```
 
-`NEXT_PUBLIC_API_BASE` is baked into the static frontend at build time. For same-origin Docker deployments, leave it unset. Local Go commands can also be run from the root with `go -C apps/server test ./...`.
+Open `http://localhost:3000`. No GitHub token is needed for public repositories. A local trusted deployment may set `GITHUB_TOKEN` or `GITHUB_TOKENS` for optional PR enrichment/private clone fallback. **Do not enable private repository access on a publicly reachable API without per-user authorization.**
 
-## API
+## HTTP API
 
-The Go process serves the static website and these endpoints:
-
-| Endpoint | Response |
+| Endpoint | Purpose |
 | --- | --- |
-| `GET /healthz` | `200 ok` (process liveness) |
-| `GET /api/starmap?repo=owner/name` | JSON [`Contract`](packages/contract/index.ts) |
-| `GET /api/starmap/stream?repo=owner/name` | Newline-delimited JSON progress events followed by a `result` or `error` event |
+| `GET /healthz` | Process liveness |
+| `GET /readyz` | Git/shared-cache readiness |
+| `GET /api/status` | Local worker and queue counters |
+| `GET /api/starmap?repo=OWNER/REPO` | JSON repository Contract |
+| `GET /api/starmap/stream?repo=OWNER/REPO` | NDJSON progress plus terminal result/error |
+| `GET /api/badge?repo=OWNER/REPO&size=medium` | Static galaxy SVG |
+| `GET /api/badge.gif?repo=OWNER/REPO` | Animated genesis-to-HEAD galaxy GIF |
 
-Example:
+Test locally with:
 
-```bash
+```sh
 curl 'http://localhost:8770/api/starmap?repo=octocat/Hello-World'
 curl -N 'http://localhost:8770/api/starmap/stream?repo=octocat/Hello-World'
+curl -o /tmp/stellar.gif 'http://localhost:8770/api/badge.gif?repo=octocat/Hello-World'
+curl -o /tmp/stellar.svg 'http://localhost:8770/api/badge?repo=octocat/Hello-World'
 ```
 
-The stream sends phases such as `resolve`, `head`, `history`, and `map`. Once the first event is sent, the stream's HTTP status is `200`; subsequent failures are reported *in-band* as `{"phase":"error","code":"...","message":"..."}`. A successful terminal event is `{"phase":"result","contract":{...}}`.
+NDJSON frames use `resolve`, `head`, `history`, and `map` progress phases, then a `result` containing the complete contract or an `error` with a typed code. After streaming begins, HTTP status remains 200 even when a later frame reports failure. Other routes return HTTP errors such as 400 invalid repo, 404 missing, 413 oversized repo, 422 empty repo, 503 busy/rate-limited, and 504 timeout.
 
-The JSON endpoint uses typed errors: `400 bad_repo`, `404 not_found`, `422 empty_repo`, `413 repo_too_large`, `503 rate_limited`, and `504 clone_timeout`; Git failures can also produce 5xx responses. Do not use the HTTP status of a started stream to determine whether the analysis succeeded.
+## Runtime settings
 
-## Backend configuration
-
-| Environment variable | Default | Purpose |
+| Variable | Local default | Vercel default / role |
 | --- | --- | --- |
-| `PORT` | `8770` | HTTP listening port |
-| `STATIC_DIR` | `.` | Built frontend directory (Docker sets `/app/web`) |
-| `CACHE_DB` | `stellar-cache.db` | SQLite contract cache path (Docker sets `/data/stellar-cache.db`) |
-| `GITHUB_TOKEN` | unset | Private Git auth and optional REST enrichment |
-| `GITHUB_TOKENS` | unset | Comma-separated token pool; overrides `GITHUB_TOKEN` |
-| `CLONE_DIR` | OS temp dir + `/stellar-repos` | Bare Git mirror cache (Docker sets `/mirrors`) |
-| `CLONE_CONCURRENCY` | `4` | Maximum concurrent clone/parse jobs |
-| `CLONE_TIMEOUT` | `10m` | Time budget for a build after it obtains a slot |
-| `CLONE_PROBE_TIMEOUT` | `3m` | Time limit for each remote HEAD probe |
-| `CLONE_MAX_MB` | `4096` | Maximum size of an individual mirror |
-| `CLONE_DISK_MB` | `20480` | Target total mirror storage budget |
-| `CLONE_TTL` | `168h` | Time before unused mirrors can be evicted |
-| `NEXT_PUBLIC_API_BASE` | unset | Build-time API origin for split frontend development |
+| `PORT` | 8770 | Set `PORT=8080` on the API project for its unprivileged container listener |
+| `STATIC_DIR` | `.` | `-` (API only) |
+| `CACHE_DB` | `stellar-cache.db` | Not used with Redis |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Unset | Required for Vercel shared cache/lease |
+| `GITHUB_TOKEN` / `GITHUB_TOKENS` | Unset | Optional PR enrichment and rate-limit retry |
+| `ALLOW_PRIVATE_REPOS` | Not applicable to local fallback | Disabled on Vercel; **never enable publicly without auth** |
+| `CLONE_CONCURRENCY` | 4 | 1 per instance |
+| `CLONE_QUEUE_MAX` / `CLONE_QUEUE_TIMEOUT` | 32 / 20s | 32 / 8s |
+| `CLONE_TIMEOUT` / `CLONE_PROBE_TIMEOUT` | 10m / 3m | 150s / 20s |
+| `CLONE_MAX_MB` / `CLONE_DISK_MB` | 4096 / 20480 | 300 / 380 |
+| `HEAD_PROBE_TTL` / `PROBE_CONCURRENCY` | 30s / 16 | 30s / 16 |
+| `CLONE_DIR` / `CLONE_TTL` | OS temp / 168h | Ephemeral mirrors |
+| `NEXT_PUBLIC_API_BASE` | Unset | Website's HTTPS API origin, baked into build |
 
-Contract JSON is cached for 24 hours per `repository + default-branch HEAD SHA + transform version`. Changes to tags or other branches *without* a new default-branch commit may remain invisible until that cache entry expires. Git mirrors are incrementally fetched and periodically evicted. Cache failures are best-effort and trigger fresh builds.
-
-**Operational limits:** This is currently a **single-instance** design. Keep `/data` and `/mirrors` writable and attached to only one server instance; do not share a SQLite WAL file across hosts or a network filesystem. Queue admission limits, readiness checks, metrics, graceful shutdown, and stream write deadlines are tracked in the [backend design review](docs/BACKEND-DESIGN-REVIEW.md) and [validation notes](docs/BACKEND-VALIDATION-2026-10-17.md). They are not implemented yet.
-
-## Repository map
+## Project layout
 
 ```text
-apps/
-  server/             Go HTTP API, Git ingestion, transform, cache and tests
-  web/                Next.js 16 / React 19 static website
-    lib/starmap/       Renderer, demo model and streaming client
-    components/       Landing, map and animation components
-packages/contract/    Shared TypeScript contract for the Go API
-DESIGN-LOCK.md         Locked galaxy behavior and visual constraints
-docs/                  Backend findings, verification and planned work
-Dockerfile             Build frontend and backend into one container
-docker-compose.yml     Local runtime and persistent volumes
-CLAUDE.md              Contributor/agent guidance for this repository
+apps/server/              Go API, Git reader, SQLite/Redis caches, badge renderers, tests
+apps/server/Dockerfile.vercel
+apps/web/                 Next.js 16 / React 19 static frontend
+apps/web/lib/starmap/     Deterministic Three.js renderer and contract client
+packages/contract/        Shared API types and invariants
+docs/                     Backend review, validation and Vercel operations
+DESIGN-LOCK.md             Authoritative galaxy design specification
+AGENTS.md / CLAUDE.md     Coding and repository guidance
+Dockerfile                Combined local Docker deployment
+docker-compose.yml        Local persisted SQLite and mirrors
 ```
 
-## Checks
+Run checks before committing:
 
-```bash
+```sh
 go -C apps/server test -race -count=1 ./...
 go -C apps/server vet ./...
 go -C apps/server build ./...
-pnpm build
+NEXT_PUBLIC_API_BASE=https://api.example.com pnpm build
 ```
 
-The backend tests cover the contract's genesis and branch invariants, SQLite expiry and migration, Git authorization fallbacks, clone size limits, mirror eviction arbitration, panic containment, and partial-Git-output failures. The frontend build verifies the static export. See [the backend design review](docs/BACKEND-DESIGN-REVIEW.md) for the previous hardening pass and known architecture choices.
+The code preserves the visual contract and existing design constraints; see [backend design findings](docs/BACKEND-DESIGN-REVIEW.md) and [validation](docs/BACKEND-VALIDATION-2026-10-17.md) for the earlier bug fixes. Current Vercel decisions and limitations are in [the architecture document](docs/VERCEL-ARCHITECTURE.md).
 
-## Roadmap and constraints
-
-- **Phase 1:** Website, real history ingestion, animated star map. Keep the renderer's visual design intact.
-- **Backend reliability:** Validate admission limits, monitoring, shutdown, stream deadlines, and cache freshness policy before changing the deployment architecture. See [current decision points](docs/BACKEND-VALIDATION-2026-10-17.md).
-- **Phase 2:** A live-updating map artifact suitable for embedding in repository READMEs.
-
-No license file is included in this repository; do not assume an open-source license for reuse or redistribution.
+**License:** No license file is currently included; do not assume permission to redistribute the source.

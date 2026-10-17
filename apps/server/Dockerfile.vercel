@@ -1,0 +1,16 @@
+# Vercel Container Functions: root directory = apps/server.
+# The ordinary Go runtime does not guarantee a git executable. Bundling Git
+# preserves the tested anonymous bare-clone pipeline in production.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /stellar .
+
+FROM alpine:3.22
+RUN apk add --no-cache git ca-certificates
+COPY --from=build /stellar /usr/local/bin/stellar
+ENV VERCEL=1 STATIC_DIR=- PORT=8080
+USER 10001:10001
+CMD ["/usr/local/bin/stellar"]

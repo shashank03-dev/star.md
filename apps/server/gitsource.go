@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,8 @@ var (
 		msg: "repository is too large to chart"}
 	errGitUnavailable = &apiError{status: 500, code: "git_unavailable",
 		msg: "git is not available on this server"}
+	errBusy = &apiError{status: 503, code: "busy",
+		msg: "too many repository analyses are running; retry shortly"}
 )
 
 // How much of the streamed history we hold on to. git log is read as a stream
@@ -100,22 +103,45 @@ type repoSnapshot struct {
 // ---- the source ----
 
 type gitSource struct {
-	dir      string     // mirror cache root
-	home     string     // isolated HOME so no user gitconfig is ever read
-	tokens   *tokenPool // private-repo auth only; never logged
-	sem      chan struct{}
-	flight   singleflight.Group
-	timeout  time.Duration
-	probe    time.Duration // ceiling for the per-request HEAD freshness probe
-	maxBytes int64         // per-repo cap, enforced while cloning
-	diskCap  int64         // total mirror-cache budget
-	ttl      time.Duration
+	dir          string     // mirror cache root
+	home         string     // isolated HOME so no user gitconfig is ever read
+	tokens       *tokenPool // private-repo auth only; never logged
+	sem          chan struct{}
+	flight       singleflight.Group
+	headFlight   singleflight.Group
+	probeSem     chan struct{} // bound remote Git probes separately from cloning
+	timeout      time.Duration
+	probe        time.Duration // ceiling for the per-request HEAD freshness probe
+	headTTL      time.Duration
+	headMu       sync.Mutex
+	headCache    map[string]headMemo
+	queueTimeout time.Duration // how long a cold build may wait for a slot
+	queueMax     int64         // maximum number of distinct cold builds waiting
+	waiting      atomic.Int64
+	maxBytes     int64 // per-repo cap, enforced while cloning
+	diskCap      int64 // total mirror-cache budget
+	ttl          time.Duration
 
 	gate     *mirrorGate // per-directory use vs sweep arbitration
 	sweeping sync.Mutex  // one eviction pass at a time
 }
 
+type headMemo struct {
+	sha, branch string
+	expires     time.Time
+}
+
 func newGitSource(tokens *tokenPool) *gitSource {
+	// Vercel Functions have an ephemeral 500 MB /tmp budget. Keep mirror
+	// growth safely under it; the shared Redis contract cache, not mirrors,
+	// provides reuse across instances. Dedicated Docker servers use the
+	// larger disk budgets below.
+	concurrency, maxMB, diskMB := 4, 4096, 20480
+	cloneTimeout, probeTimeout, queueTimeout := 10*time.Minute, 3*time.Minute, 20*time.Second
+	if getenv("VERCEL") != "" {
+		concurrency, maxMB, diskMB = 1, 300, 380
+		cloneTimeout, probeTimeout, queueTimeout = 150*time.Second, 20*time.Second, 8*time.Second
+	}
 	dir := strings.TrimSpace(getenv("CLONE_DIR"))
 	if dir == "" {
 		dir = filepath.Join(os.TempDir(), "stellar-repos")
@@ -125,16 +151,21 @@ func newGitSource(tokens *tokenPool) *gitSource {
 		log.Printf("git: clone dir %s not writable (%v) - every build will fail", dir, err)
 	}
 	g := &gitSource{
-		dir:      dir,
-		home:     home,
-		tokens:   tokens,
-		sem:      make(chan struct{}, envInt("CLONE_CONCURRENCY", 4)),
-		timeout:  envDur("CLONE_TIMEOUT", 10*time.Minute),
-		probe:    envDur("CLONE_PROBE_TIMEOUT", 3*time.Minute),
-		maxBytes: int64(envInt("CLONE_MAX_MB", 4096)) << 20,
-		diskCap:  int64(envInt("CLONE_DISK_MB", 20480)) << 20,
-		ttl:      envDur("CLONE_TTL", 7*24*time.Hour),
-		gate:     newMirrorGate(),
+		dir:          dir,
+		home:         home,
+		tokens:       tokens,
+		sem:          make(chan struct{}, envInt("CLONE_CONCURRENCY", concurrency)),
+		probeSem:     make(chan struct{}, envInt("PROBE_CONCURRENCY", 16)),
+		timeout:      envDur("CLONE_TIMEOUT", cloneTimeout),
+		probe:        envDur("CLONE_PROBE_TIMEOUT", probeTimeout),
+		headTTL:      envDur("HEAD_PROBE_TTL", 30*time.Second),
+		headCache:    make(map[string]headMemo),
+		queueTimeout: envDur("CLONE_QUEUE_TIMEOUT", queueTimeout),
+		queueMax:     int64(envInt("CLONE_QUEUE_MAX", 32)),
+		maxBytes:     int64(envInt("CLONE_MAX_MB", maxMB)) << 20,
+		diskCap:      int64(envInt("CLONE_DISK_MB", diskMB)) << 20,
+		ttl:          envDur("CLONE_TTL", 7*24*time.Hour),
+		gate:         newMirrorGate(),
 	}
 	return g
 }
@@ -145,6 +176,57 @@ func newGitSource(tokens *tokenPool) *gitSource {
 // `git ls-remote --symref` round trip. This is the freshness probe and cache
 // key source: it replaces the REST call that used to cost quota on every hit.
 func (g *gitSource) remoteHead(ctx context.Context, repo string) (headSHA, defaultBranch string, err error) {
+	if g.headTTL > 0 {
+		g.headMu.Lock()
+		entry, ok := g.headCache[repo]
+		g.headMu.Unlock()
+		if ok && time.Now().Before(entry.expires) {
+			return entry.sha, entry.branch, nil
+		}
+	}
+	// Concurrent visitors requesting the same repo share the expensive Git
+	// probe. Its detached deadline keeps a disconnect from disrupting peers.
+	ch := g.headFlight.DoChan(repo, func() (any, error) {
+		workCtx, cancel := context.WithTimeout(context.Background(), g.probe)
+		defer cancel()
+		if g.probeSem != nil {
+			queueCtx, stop := context.WithTimeout(workCtx, 3*time.Second)
+			defer stop()
+			select {
+			case g.probeSem <- struct{}{}:
+				defer func() { <-g.probeSem }()
+			case <-queueCtx.Done():
+				return nil, errBusy
+			}
+		}
+		sha, branch, probeErr := g.probeRemoteHead(workCtx, repo)
+		if probeErr == nil && g.headTTL > 0 {
+			g.headMu.Lock()
+			// Avoid unbounded memory when attackers send thousands of valid names.
+			if len(g.headCache) >= 2048 {
+				clear(g.headCache)
+			}
+			if g.headCache == nil {
+				g.headCache = make(map[string]headMemo)
+			}
+			g.headCache[repo] = headMemo{sha, branch, time.Now().Add(g.headTTL)}
+			g.headMu.Unlock()
+		}
+		return headMemo{sha: sha, branch: branch}, probeErr
+	})
+	select {
+	case result := <-ch:
+		if result.Err != nil {
+			return "", "", result.Err
+		}
+		h := result.Val.(headMemo)
+		return h.sha, h.branch, nil
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	}
+}
+
+func (g *gitSource) probeRemoteHead(ctx context.Context, repo string) (headSHA, defaultBranch string, err error) {
 	// The probe runs on every request, cache hit or miss, so it must not be
 	// able to hang a handler behind a stalled connection: git's HTTP transport
 	// has no low-speed abort of its own, and without a deadline a blackholed
@@ -251,21 +333,37 @@ func (g *gitSource) buildSnapshot(ctx context.Context, repo, headSHA, defaultBra
 		return nil, err
 	}
 
+	// Admission happens before acquiring the mirror gate. Every distinct
+	// cold build consumes at most one queue slot and has a finite wait budget,
+	// even though singleflight detaches it from the original browser request.
+	if n := g.waiting.Add(1); g.queueMax > 0 && n > g.queueMax {
+		g.waiting.Add(-1)
+		return nil, errBusy
+	}
+	queueCtx := ctx
+	cancelQueue := func() {}
+	if g.queueTimeout > 0 {
+		queueCtx, cancelQueue = context.WithTimeout(ctx, g.queueTimeout)
+	}
+	defer cancelQueue()
+	select {
+	case g.sem <- struct{}{}:
+	case <-queueCtx.Done():
+		g.waiting.Add(-1)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errBusy
+	}
+	g.waiting.Add(-1)
+	defer func() { <-g.sem }()
+
 	// One build at a time per mirror, held from before ensureMirror until the
 	// parse is done: a fetch (or a failed fetch's RemoveAll) must never race
 	// another build reading the same directory, and the sweep must see the
 	// mirror as in use for the whole span (see mirrorGate).
 	g.gate.acquire(dir)
 	defer g.gate.release(dir)
-
-	// Bound how many clones run at once: each one is network + disk heavy, and
-	// an unbounded fan-out would thrash both.
-	select {
-	case g.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-g.sem }()
 
 	// This timeout wraps the clone *and* the parse, which is what makes an idle
 	// mtime a safe eviction signal (see sweep).
@@ -689,8 +787,18 @@ func (g *gitSource) command(ctx context.Context, dir string, authed bool, args .
 // lift it too. Everything else - a real 404, a network fault, a server error -
 // fails the same way with or without auth.
 func (g *gitSource) retryAuthed(err error) bool {
-	return err != nil && g.tokens.size() > 0 &&
-		(errors.Is(err, errNotFound) || errors.Is(err, errRateLimit))
+	if err == nil || g.tokens == nil || g.tokens.size() == 0 {
+		return false
+	}
+	if errors.Is(err, errRateLimit) {
+		return true // authenticated Git transport can bypass anonymous quota
+	}
+	// A public Vercel endpoint has no per-visitor authorization. Never
+	// disclose private repository history simply because the deployment has
+	// a token with access. A self-hosted private deployment retains the
+	// historical opt-in behavior.
+	return errors.Is(err, errNotFound) &&
+		(getenv("VERCEL") == "" || getenv("ALLOW_PRIVATE_REPOS") == "true")
 }
 
 // run executes a git command and returns stdout.
